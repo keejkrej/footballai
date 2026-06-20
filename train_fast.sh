@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fast training run for quick iteration.
-# Preprocesses 500 matches (~4% of the dataset) and trains for up to 5 epochs
-# with early stopping. Should finish in under 10 minutes.
+# Quick iteration script: precomputes only 500 matches (~12% of full data)
+# and trains for up to 5 epochs. Useful for fast hyperparameter checks.
+# If you have already preprocessed the FULL dataset, use train_full.sh instead.
 
 set -e
 source .venv/bin/activate
@@ -12,7 +12,7 @@ LOG_DIR="./runs_fast"
 
 mkdir -p "$PROCESSED_DIR" "$CHECKPOINT_DIR" "$LOG_DIR"
 
-echo "=== Preprocessing 500 matches ==="
+echo "=== Preprocessing 500 matches for fast iteration ==="
 python preprocess.py \
   --data_dir /home/jack/workspace/open-data/data \
   --out_dir "$PROCESSED_DIR" \
