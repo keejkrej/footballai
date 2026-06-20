@@ -21,3 +21,13 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# FootballAI local artifacts
+.venv/
+data/raw/
+data/cache/
+data/outputs/
+data/live/
+external/
+models/
+*.pt

@@ -4,3 +4,4 @@ numpy
 lap
 gdown
 tqdm
+torch

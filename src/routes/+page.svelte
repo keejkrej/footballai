@@ -10,7 +10,34 @@
 		classes: Record<string, number>;
 	};
 
+	type LiveState = {
+		status?: string;
+		message?: string;
+		source?: string;
+		frame?: number;
+		latency_ms?: number;
+		detections?: number;
+		classes?: Record<string, number>;
+		possession?: string | null;
+		pressure?: {
+			pressure_side: string;
+			pressure_score: number;
+			left_third_players: number;
+			middle_third_players: number;
+			right_third_players: number;
+		};
+		trading?: {
+			leader: string;
+			confidence: number;
+			avg_pressure?: number;
+			ball_seen_rate?: number;
+			possession_seen_rate?: number;
+			commentary: string;
+		};
+	};
+
 	let runs = $state<RunSummary[]>([]);
+	let live = $state<LiveState>({ status: 'idle' });
 	let selectedId = $state('');
 	let loading = $state(true);
 	let error = $state('');
@@ -40,8 +67,20 @@
 		}
 	}
 
+	async function loadLive() {
+		try {
+			const response = await fetch('/api/live');
+			if (response.ok) live = (await response.json()) as LiveState;
+		} catch {
+			live = { status: 'offline', message: 'Live state is not reachable.' };
+		}
+	}
+
 	$effect(() => {
 		loadRuns();
+		loadLive();
+		const interval = window.setInterval(loadLive, 2000);
+		return () => window.clearInterval(interval);
 	});
 </script>
 
@@ -61,6 +100,32 @@
 		</div>
 		<button type="button" onclick={loadRuns}>Refresh</button>
 	</header>
+
+	<section class="live-panel">
+		<div>
+			<p class="eyebrow">Live Stream</p>
+			<h2>{live.status === 'running' ? 'Inference Running' : 'Waiting For Stream'}</h2>
+			<p>{live.trading?.commentary ?? live.message ?? 'Start the live inference script to populate this panel.'}</p>
+		</div>
+		<div class="live-metrics">
+			<div>
+				<span class="metric-value">{live.trading?.leader ?? '-'}</span>
+				<span class="metric-label">pressure edge</span>
+			</div>
+			<div>
+				<span class="metric-value">{live.trading?.confidence ?? 0}%</span>
+				<span class="metric-label">signal confidence</span>
+			</div>
+			<div>
+				<span class="metric-value">{live.pressure?.pressure_score ?? 0}</span>
+				<span class="metric-label">pressure score</span>
+			</div>
+			<div>
+				<span class="metric-value">{live.latency_ms ? `${Math.round(live.latency_ms)}ms` : '-'}</span>
+				<span class="metric-label">model latency</span>
+			</div>
+		</div>
+	</section>
 
 	{#if loading}
 		<section class="empty">Loading generated overlays...</section>
@@ -215,6 +280,38 @@
 		gap: 18px;
 	}
 
+	.live-panel {
+		display: grid;
+		grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+		gap: 14px;
+		margin-bottom: 18px;
+		padding: 16px;
+		border: 1px solid #26302c;
+		background: #121716;
+		border-radius: 8px;
+	}
+
+	.live-panel p:last-child {
+		margin-top: 8px;
+		color: #c4ccc8;
+		line-height: 1.4;
+	}
+
+	.live-metrics {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	.live-metrics > div {
+		display: grid;
+		gap: 4px;
+		padding: 12px;
+		border: 1px solid #26302c;
+		background: #161b1a;
+		border-radius: 8px;
+	}
+
 	.runlist {
 		display: flex;
 		flex-direction: column;
@@ -351,11 +448,13 @@
 		}
 
 		.workspace,
-		.detail-grid {
+		.detail-grid,
+		.live-panel {
 			grid-template-columns: 1fr;
 		}
 
-		.metrics {
+		.metrics,
+		.live-metrics {
 			grid-template-columns: 1fr;
 		}
 	}
