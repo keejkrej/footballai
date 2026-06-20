@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Download a short YouTube segment for local football video analysis."""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+from pathlib import Path
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("url", help="YouTube URL to download")
+    parser.add_argument("--start", default="00:00:00", help="Start timestamp, HH:MM:SS")
+    parser.add_argument("--end", default="00:02:00", help="End timestamp, HH:MM:SS")
+    parser.add_argument("--output", default="data/raw/youtube_clip.mp4", help="Output mp4 path")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--download-sections",
+        f"*{args.start}-{args.end}",
+        "-f",
+        "bv*[height<=720]+ba/b[height<=720]/b",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        str(output),
+        args.url,
+    ]
+    subprocess.run(cmd, check=True)
+
+
+if __name__ == "__main__":
+    main()
