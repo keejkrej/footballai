@@ -4,9 +4,10 @@ from typing import Optional
 
 import numpy as np
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 
 from config import ModelConfig
+from data.preprocessed_dataset import PreprocessedSequenceDataset
 from data.statsbomb_dataset import SequenceDataset
 
 
@@ -48,9 +49,16 @@ def padded_collate(batch: list) -> dict:
 
 
 class StatsBombDataModule(pl.LightningDataModule):
-    """LightningDataModule wrapping SequenceDataset.
+    """LightningDataModule wrapping preprocessed (or raw) sequence data.
 
     Splits sequences by match_id to prevent leakage.
+
+    Args:
+        config: ModelConfig
+        val_ratio: fraction of matches held out for validation
+        num_workers: DataLoader workers
+        use_preprocessed: if True, load from `./data/processed/*.pt` instead of raw JSON
+        processed_dir: override preprocessed data directory
     """
 
     def __init__(
@@ -58,23 +66,38 @@ class StatsBombDataModule(pl.LightningDataModule):
         config: ModelConfig,
         val_ratio: float = 0.15,
         num_workers: int = 4,
+        use_preprocessed: bool = True,
+        processed_dir: Optional[str] = None,
+        cache_matches: int = 16,
     ):
         super().__init__()
         self.config = config
         self.val_ratio = val_ratio
         self.num_workers = num_workers
-        self._full_dataset: Optional[SequenceDataset] = None
+        self.use_preprocessed = use_preprocessed
+        self.processed_dir = processed_dir or "./data/processed"
+        self.cache_matches = cache_matches
+        self._full_dataset: Optional[Dataset] = None
         self._train_indices: Optional[list] = None
         self._val_indices: Optional[list] = None
 
     def setup(self, stage: Optional[str] = None) -> None:
-        self._full_dataset = SequenceDataset(
-            data_root=self.config.data_root,
-            seq_len=self.config.seq_len,
-            stride=self.config.seq_stride,
-            horizon_seconds=self.config.label_horizon_seconds,
-            max_matches=self.config.max_matches,
-        )
+        if self.use_preprocessed:
+            self._full_dataset = PreprocessedSequenceDataset(
+                processed_dir=self.processed_dir,
+                seq_len=self.config.seq_len,
+                stride=self.config.seq_stride,
+                max_matches=self.config.max_matches,
+                cache_matches=self.cache_matches,
+            )
+        else:
+            self._full_dataset = SequenceDataset(
+                data_root=self.config.data_root,
+                seq_len=self.config.seq_len,
+                stride=self.config.seq_stride,
+                horizon_seconds=self.config.label_horizon_seconds,
+                max_matches=self.config.max_matches,
+            )
         unique_matches = sorted({match_id for match_id, _, _ in self._full_dataset._index})
         rng = np.random.default_rng(self.config.seed)
         rng.shuffle(unique_matches)
@@ -89,23 +112,20 @@ class StatsBombDataModule(pl.LightningDataModule):
             i for i, (mid, _, _) in enumerate(self._full_dataset._index) if mid in val_matches
         ]
 
-    def train_dataloader(self) -> DataLoader:
+    def _make_dataloader(self, indices: list, shuffle: bool) -> DataLoader:
         return DataLoader(
-            Subset(self._full_dataset, self._train_indices),
+            Subset(self._full_dataset, indices),
             batch_size=self.config.batch_size,
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=self.num_workers,
             pin_memory=True,
             collate_fn=padded_collate,
-            drop_last=True,
+            drop_last=shuffle,
+            persistent_workers=self.num_workers > 0,
         )
 
+    def train_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self._train_indices, shuffle=True)
+
     def val_dataloader(self) -> DataLoader:
-        return DataLoader(
-            Subset(self._full_dataset, self._val_indices),
-            batch_size=self.config.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            collate_fn=padded_collate,
-        )
+        return self._make_dataloader(self._val_indices, shuffle=False)

@@ -34,6 +34,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--turnover_weight", type=float, default=1.0)
     parser.add_argument("--gradient_clip_val", type=float, default=1.0)
     parser.add_argument("--accumulate_grad_batches", type=int, default=1)
+    parser.add_argument("--use_preprocessed", action="store_true", default=True)
+    parser.add_argument("--no_preprocessed", dest="use_preprocessed", action="store_false")
+    parser.add_argument("--processed_dir", type=str, default="./data/processed")
+    parser.add_argument("--cache_matches", type=int, default=16)
     return parser.parse_args()
 
 
@@ -60,6 +64,9 @@ def main() -> None:
         config=config,
         val_ratio=args.val_ratio,
         num_workers=args.num_workers,
+        use_preprocessed=args.use_preprocessed,
+        processed_dir=args.processed_dir,
+        cache_matches=args.cache_matches,
     )
 
     model = FootballPretrainModule(

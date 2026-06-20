@@ -71,19 +71,36 @@ source .venv/bin/activate
 uv pip install torch torchvision torchaudio numpy pandas scipy tqdm pytorch-lightning torchmetrics tensorboard
 ```
 
+## Preprocessing (do this once)
+
+Training from raw JSON is CPU-bound and keeps the GPU idle. Convert all matches
+into `.pt` tensors first:
+
+```bash
+python preprocess.py \
+  --data_dir /home/jack/workspace/open-data/data \
+  --out_dir ./data/processed \
+  --num_workers 8
+```
+
+This takes ~15 minutes for the full ~4,200-match dataset and writes one
+`{match_id}.pt` file per match under `./data/processed/`.
+
 ## Training
 
-Full run on all available matches:
+Full run on all available matches (uses preprocessed tensors by default):
 
 ```bash
 python train.py \
   --data_dir /home/jack/workspace/open-data/data \
+  --processed_dir ./data/processed \
   --epochs 50 \
-  --batch_size 32 \
+  --batch_size 64 \
   --seq_len 50 \
   --seq_stride 25 \
   --horizon 5.0 \
   --val_ratio 0.15 \
+  --num_workers 8 \
   --checkpoint_dir ./checkpoints \
   --log_dir ./runs
 ```
@@ -91,8 +108,11 @@ python train.py \
 Quick smoke test on a couple of matches:
 
 ```bash
+python preprocess.py --max_matches 2 --out_dir ./data/processed_smoke
+
 python train.py \
   --max_matches 2 \
+  --processed_dir ./data/processed_smoke \
   --epochs 1 \
   --batch_size 2 \
   --seq_len 10 \
@@ -100,6 +120,12 @@ python train.py \
   --num_workers 0 \
   --checkpoint_dir ./checkpoints_smoke \
   --log_dir ./runs_smoke
+```
+
+Force raw JSON mode (slow, only for debugging):
+
+```bash
+python train.py --no_preprocessed --num_workers 4 ...
 ```
 
 Resume from a checkpoint:

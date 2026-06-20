@@ -10,11 +10,13 @@ from .state_builder import (
     seconds_in_period,
 )
 from .datamodule import StatsBombDataModule, padded_collate
+from .preprocessed_dataset import PreprocessedSequenceDataset
 from .statsbomb_dataset import StatsBombDataset, SequenceDataset
 
 __all__ = [
     "StatsBombDataset",
     "SequenceDataset",
+    "PreprocessedSequenceDataset",
     "StatsBombDataModule",
     "padded_collate",
     "MatchState",
