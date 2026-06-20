@@ -98,7 +98,7 @@ class StatsBombDataModule(pl.LightningDataModule):
                 horizon_seconds=self.config.label_horizon_seconds,
                 max_matches=self.config.max_matches,
             )
-        unique_matches = sorted({match_id for match_id, _, _ in self._full_dataset._index})
+        unique_matches = sorted({item[0] for item in self._full_dataset._index})
         rng = np.random.default_rng(self.config.seed)
         rng.shuffle(unique_matches)
         split_idx = int(len(unique_matches) * (1 - self.val_ratio))
@@ -106,10 +106,10 @@ class StatsBombDataModule(pl.LightningDataModule):
         val_matches = set(unique_matches[split_idx:])
 
         self._train_indices = [
-            i for i, (mid, _, _) in enumerate(self._full_dataset._index) if mid in train_matches
+            i for i, item in enumerate(self._full_dataset._index) if item[0] in train_matches
         ]
         self._val_indices = [
-            i for i, (mid, _, _) in enumerate(self._full_dataset._index) if mid in val_matches
+            i for i, item in enumerate(self._full_dataset._index) if item[0] in val_matches
         ]
 
     def _make_dataloader(self, indices: list, shuffle: bool) -> DataLoader:
