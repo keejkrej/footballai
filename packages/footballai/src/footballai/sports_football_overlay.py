@@ -417,6 +417,7 @@ class SportsProcessor:
         self.team_classifier: TeamClassifier | None = None
         self._team_classifier_state: TeamClassifierState | None = None
         self._team_fit_done = False
+        self.team_by_track: dict[int, int] = {}
 
     def load_models(self) -> None:
         if self.player_model is not None:
@@ -469,6 +470,14 @@ class SportsProcessor:
         except Exception as exc:
             print(f"Lazy team classification failed: {exc}; continuing without team colors")
 
+    def _classify_crop(self, crop: np.ndarray) -> int:
+        """Classify a single player crop using the fitted team classifier."""
+        if self.team_classifier is not None:
+            return int(self.team_classifier.predict([crop])[0])
+        if self._team_classifier_state is not None:
+            return int(self._team_classifier_state.predict([crop])[0])
+        return PLAYER_CLASS_ID
+
     def _resolve_goalkeepers_team_id(
         self, players: sv.Detections, players_team_id: np.ndarray, goalkeepers: sv.Detections
     ) -> np.ndarray:
@@ -484,17 +493,21 @@ class SportsProcessor:
         return np.array(ids, dtype=int)
 
     def _lookup_team_id(self, frame: np.ndarray, players: sv.Detections, goalkeepers: sv.Detections, referees: sv.Detections) -> list[list[int]]:
-        if self.team_classifier is not None and len(players):
-            player_crops = _get_crops(frame, players)
-            players_team_id = self.team_classifier.predict(player_crops)
-            goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id, goalkeepers)
-            return [players_team_id.tolist(), goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
-        if self._team_classifier_state is not None and len(players):
-            player_crops = _get_crops(frame, players)
-            players_team_id = self._team_classifier_state.predict(player_crops)
-            goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id, goalkeepers)
-            return [players_team_id.tolist(), goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
-        return [[PLAYER_CLASS_ID] * len(players), [GOALKEEPER_CLASS_ID] * len(goalkeepers), [REFEREE_CLASS_ID] * len(referees)]
+        if (self.team_classifier is None and self._team_classifier_state is None) or len(players) == 0:
+            return [[PLAYER_CLASS_ID] * len(players), [GOALKEEPER_CLASS_ID] * len(goalkeepers), [REFEREE_CLASS_ID] * len(referees)]
+
+        player_crops = _get_crops(frame, players)
+        players_team_id: list[int] = []
+        for crop, track_id in zip(player_crops, players.tracker_id if players.tracker_id is not None else range(len(player_crops))):
+            if track_id in self.team_by_track:
+                players_team_id.append(self.team_by_track[track_id])
+            else:
+                team_id = self._classify_crop(crop)
+                self.team_by_track[int(track_id)] = team_id
+                players_team_id.append(team_id)
+        players_team_id_arr = np.array(players_team_id, dtype=int)
+        goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id_arr, goalkeepers)
+        return [players_team_id, goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
 
     def process_frame(self, frame: np.ndarray, frame_idx: int, fps: float) -> tuple[list[dict], np.ndarray, dict]:
         if self.player_model is None or self.pitch_model is None or self.ball_model is None or self.ball_slicer is None:
