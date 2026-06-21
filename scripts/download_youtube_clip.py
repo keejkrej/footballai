@@ -28,14 +28,24 @@ def main() -> None:
         "--download-sections",
         f"*{args.start}-{args.end}",
         "-f",
-        "bv*[height<=720]+ba/b[height<=720]/b",
+        "bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/b",
         "--merge-output-format",
         "mp4",
+        "--recode-video",
+        "mp4",
+        "--postprocessor-args",
+        "-c:v libx264 -crf 23 -c:a aac",
         "-o",
         str(output),
         args.url,
     ]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            "yt-dlp not found on PATH. Install it with your package manager "
+            "or add it to the virtual environment (e.g. `uv pip install yt-dlp`)."
+        ) from exc
 
 
 if __name__ == "__main__":

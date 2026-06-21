@@ -31,3 +31,5 @@ data/live/
 external/
 models/
 *.pt
+__pycache__/
+*.py[cod]

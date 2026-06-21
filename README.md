@@ -12,10 +12,18 @@ Hackathon prototype for extracting football game state from broadcast video and 
 
 ## Python setup
 
-Use Python 3.11+:
+Use Python 3.11+ with a virtual environment:
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
+```
+
+Or use `uv`:
+
+```bash
+uv pip install -r requirements.txt
 ```
 
 You also need `yt-dlp` and `ffmpeg` available on PATH.
@@ -28,6 +36,20 @@ external/yolov5
 ```
 
 These are intentionally ignored by Git because they are large/local artifacts.
+
+The improved Roboflow `sports` YOLOv8 flow expects:
+
+```text
+models/football-player-detection.pt
+models/football-pitch-detection.pt
+models/football-ball-detection.pt
+```
+
+Download them with:
+
+```bash
+python scripts/setup_sports_models.py
+```
 
 ## Frontend setup
 
@@ -50,6 +72,13 @@ python scripts/download_youtube_clip.py \
   --start 00:00:00 \
   --end 00:00:30 \
   --output data/raw/youtube_clip.mp4
+```
+
+The script now requests H.264 video so OpenCV can read the result without
+needing an AV1 decoder. If you already have an AV1 clip, transcode it with:
+
+```bash
+ffmpeg -i data/raw/youtube_clip.mp4 -c:v libx264 -crf 23 -c:a aac data/raw/youtube_clip_h264.mp4
 ```
 
 ## Render a YOLO26 positioning overlay
@@ -79,6 +108,32 @@ The Roboflow tutorial model uses four football classes:
 - `player`
 - `referee`
 
+## Render the improved Roboflow `sports` overlay
+
+This uses YOLOv8 models plus ByteTrack, pitch keypoint homography, team
+classification, and a dedicated ball tracker.
+
+```bash
+python scripts/sports_football_overlay.py \
+  --video data/raw/youtube_clip.mp4 \
+  --output data/outputs/sports_overlay.mp4 \
+  --csv data/outputs/sports_positions.csv \
+  --max-frames 900 \
+  --stride 2
+```
+
+Options:
+
+- `--skip-team-fit` – skip SigLIP/UMAP/KMeans team clustering (much faster).
+- `--device cuda` / `mps` / `cpu`.
+- `--team-sample-stride 60` – how often to sample frames for team crops.
+
+Outputs:
+
+- `data/outputs/sports_overlay.mp4` – annotated video with radar/minimap.
+- `data/outputs/sports_positions.csv` – per-frame detections with broadcast
+  coordinates and real-world pitch x/y in centimeters.
+
 ## Run live stream inference
 
 The live script accepts any OpenCV/FFmpeg-readable source:
@@ -90,11 +145,24 @@ The live script accepts any OpenCV/FFmpeg-readable source:
 - HTTP video URL
 - capture device path
 
-Local file smoke test:
+Local file smoke test with the improved `sports` backend (default):
 
 ```bash
 python scripts/live_stream_inference.py \
   --source data/raw/youtube_clip.mp4 \
+  --backend sports \
+  --state data/live/latest.json \
+  --max-frames 300 \
+  --stride 10 \
+  --overlay-output data/outputs/sports_live_overlay.mp4
+```
+
+Local file smoke test with the original YOLOv5 backend:
+
+```bash
+python scripts/live_stream_inference.py \
+  --source data/raw/youtube_clip.mp4 \
+  --backend yolov5 \
   --weights models/football_yolov5_best.pt \
   --yolov5-repo external/yolov5 \
   --state data/live/latest.json \
@@ -102,23 +170,21 @@ python scripts/live_stream_inference.py \
   --stride 10
 ```
 
-Webcam:
+Webcam with the `sports` backend:
 
 ```bash
 python scripts/live_stream_inference.py \
   --source 0 \
-  --weights models/football_yolov5_best.pt \
-  --yolov5-repo external/yolov5 \
+  --backend sports \
   --state data/live/latest.json
 ```
 
-HLS/RTMP livestream:
+HLS/RTMP livestream with the `sports` backend:
 
 ```bash
 python scripts/live_stream_inference.py \
   --source "https://example.com/live/playlist.m3u8" \
-  --weights models/football_yolov5_best.pt \
-  --yolov5-repo external/yolov5 \
+  --backend sports \
   --state data/live/latest.json
 ```
 
