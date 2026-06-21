@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Download the YOLOv8 model weights used by the Roboflow sports soccer example.
 
-The weights are placed under models/ so the overlay and live scripts can load
+The weights are placed under ``models/`` so the overlay and live scripts can load
 them without relying on a sibling data/ directory or the example setup.sh script.
 """
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import gdown
@@ -22,26 +21,14 @@ MODELS = {
 }
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--output-dir",
-        default=str(REPO_ROOT / "models"),
-        help="Directory to write model weights",
-    )
-    parser.add_argument("--force", action="store_true", help="Re-download existing files")
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    output_dir = Path(args.output_dir)
+def ensure_models(output_dir: Path | str = REPO_ROOT / "models", force: bool = False) -> Path:
+    """Ensure the Roboflow sports model weights exist, downloading them if necessary."""
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for filename, file_id in MODELS.items():
         destination = output_dir / filename
-        if destination.exists() and not args.force:
-            print(f"Skipping {destination} (already exists)")
+        if destination.exists() and not force:
             continue
         url = f"https://drive.google.com/uc?id={file_id}"
         print(f"Downloading {filename} ...")
@@ -49,7 +36,22 @@ def main() -> None:
         if not destination.exists():
             raise RuntimeError(f"Failed to download {filename}")
 
-    print("Sports models ready in:", output_dir)
+    return output_dir
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output-dir",
+        default=str(REPO_ROOT / "models"),
+        help="Directory to write model weights",
+    )
+    parser.add_argument("--force", action="store_true", help="Re-download existing files")
+    args = parser.parse_args()
+    ensure_models(args.output_dir, args.force)
+    print("Sports models ready in:", args.output_dir)
 
 
 if __name__ == "__main__":

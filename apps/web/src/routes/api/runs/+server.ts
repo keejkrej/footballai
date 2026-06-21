@@ -19,10 +19,10 @@ type RunSummary = {
 function matchingCsv(videoName: string): string | null {
 	const stem = videoName.replace(/\.mp4$/, '');
 	const candidates = [
-		`${stem}.csv`,
-		`${stem.replace(/overlay/, 'positions')}.csv`,
-		`${stem.replace(/player_overlay/, 'player_positions')}.csv`,
-		`${stem.replace(/football_yolov5_overlay/, 'football_yolov5_positions')}.csv`
+		// New webapp naming: <id>_overlay.mp4 -> <id>.csv
+		`${stem.replace(/_overlay$/, '')}.csv`,
+		// Generic fallback for any <name>.mp4 -> <name>.csv
+		`${stem}.csv`
 	];
 
 	for (const candidate of candidates) {

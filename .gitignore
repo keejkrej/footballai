@@ -5,7 +5,7 @@ node_modules
 .vercel
 .netlify
 .wrangler
-/.svelte-kit
+.svelte-kit/
 /build
 .turbo/
 
@@ -32,6 +32,7 @@ data/raw/
 data/cache/
 data/outputs/
 data/live/
+data/jobs/
 external/
 models/
 *.pt
