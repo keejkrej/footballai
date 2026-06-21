@@ -15,7 +15,7 @@
 
 	type Job = {
 		id: string;
-		status: string;
+		status: 'pending' | 'downloading' | 'inferencing' | 'done' | 'error';
 		progress: number;
 		message: string;
 		videoUrl?: string;
@@ -54,7 +54,6 @@
 	let skipTeamFit = $state(false);
 	let runningJob = $state<Job | null>(null);
 	let showProgress = $state(false);
-	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Live mode state
 	let streamUrl = $state('');
@@ -71,14 +70,31 @@
 	let outputCtx = $state<CanvasRenderingContext2D | null>(null);
 	let objectUrl: string | null = null;
 	let hls: Hls | null = null;
+	let fullJobPreviewUrl = $state<string | null>(null);
+	let fullJobObjectUrl: string | null = null;
 
 	const selectedRun = $derived(runs.find((run) => run.id === selectedId) ?? runs[0]);
 	const totalDetections = $derived(selectedRun?.detections ?? 0);
 	const classEntries = $derived(Object.entries(selectedRun?.classes ?? {}).sort((a, b) => b[1] - a[1]));
 
+	const wsUrl = () => {
+		const cfg = (window as any).__FOOTBALLAI_WS__ as string | undefined;
+		if (cfg) return cfg;
+		const loc = window.location;
+		const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+		return `${protocol}//${loc.host}/ws`;
+	};
+
 	function formatBytes(bytes: number) {
 		if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
 		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	}
+
+	function ensureOutputCtx() {
+		if (!outputCtx && outputCanvas) {
+			outputCtx = outputCanvas.getContext('2d');
+		}
+		return outputCtx;
 	}
 
 	async function loadRuns() {
@@ -97,6 +113,67 @@
 		}
 	}
 
+	function handleWsMessage(event: MessageEvent<string | Blob>) {
+		if (typeof event.data === 'string') {
+			try {
+				const payload = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
+				if (payload.type === 'metadata') {
+					liveMeta = payload as unknown as LiveMetadata;
+				} else if (payload.type === 'job_progress') {
+					runningJob = {
+						...(runningJob ?? { id: payload.job_id as string }),
+						status: payload.status as Job['status'],
+						progress: (payload.progress as number) ?? 0,
+						message: (payload.message as string) ?? '',
+						videoUrl: payload.video_url as string | undefined,
+						csvUrl: payload.csv_url as string | null | undefined,
+					};
+					if (payload.preview_frame as string | undefined) {
+						const base64 = payload.preview_frame as string;
+						if (fullJobObjectUrl) URL.revokeObjectURL(fullJobObjectUrl);
+						fullJobObjectUrl = URL.createObjectURL(
+							new Blob([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], { type: 'image/jpeg' })
+						);
+						fullJobPreviewUrl = fullJobObjectUrl;
+					}
+					const jobStatus = runningJob.status;
+					if (jobStatus === 'done' || jobStatus === 'error') {
+						setTimeout(async () => {
+							showProgress = false;
+							runningJob = null;
+							fullJobPreviewUrl = null;
+							if (fullJobObjectUrl) {
+								URL.revokeObjectURL(fullJobObjectUrl);
+								fullJobObjectUrl = null;
+							}
+							if (jobStatus === 'done') await loadRuns();
+						}, 2000);
+					}
+				} else if (payload.type === 'error') {
+					error = (payload.message as string) ?? 'Server error';
+					showProgress = false;
+					runningJob = null;
+				}
+			} catch {
+				// ignore non-JSON text
+			}
+		} else if (event.data instanceof Blob) {
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+			objectUrl = URL.createObjectURL(event.data);
+			const ctx = ensureOutputCtx();
+			const canvas = outputCanvas;
+			if (ctx && canvas) {
+				const img = new Image();
+				img.onload = () => {
+					canvas.width = img.naturalWidth;
+					canvas.height = img.naturalHeight;
+					ctx.drawImage(img, 0, 0);
+				};
+				img.src = objectUrl;
+			}
+		}
+	}
+
 	async function startFullPipeline() {
 		if (!youtubeUrl.trim()) {
 			error = 'Please enter a YouTube URL';
@@ -105,44 +182,25 @@
 		error = '';
 		showProgress = true;
 		try {
-			const response = await fetch('/api/full', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
+			openWsIfNeeded();
+			ws?.send(
+				JSON.stringify({
+					action: 'full',
 					youtubeUrl,
 					start: startTime,
 					end: endTime,
 					device,
-					maxFrames,
+					max_frames: maxFrames,
 					stride,
-					skipTeamFit
+					skip_team_fit: skipTeamFit,
 				})
-			});
-			const data = (await response.json()) as { jobId?: string; error?: string };
-			if (!response.ok || data.error) {
-				throw new Error(data.error || `Failed to start pipeline: ${response.status}`);
-			}
-			const jobId = data.jobId!;
-			runningJob = { id: jobId, status: 'pending', progress: 0, message: 'Queued' };
-			pollInterval = setInterval(async () => {
-				const res = await fetch(`/api/jobs/${jobId}`);
-				if (!res.ok) return;
-				const payload = (await res.json()) as { job: Job };
-				runningJob = payload.job;
-				if (payload.job.status === 'done' || payload.job.status === 'error') {
-					if (pollInterval) clearInterval(pollInterval);
-					pollInterval = null;
-					if (payload.job.status === 'done') {
-						await loadRuns();
-						const run = runs.find((r) => r.video === payload.job.videoUrl);
-						if (run) selectedId = run.id;
-					}
-					setTimeout(() => {
-						showProgress = false;
-						runningJob = null;
-					}, 2000);
-				}
-			}, 1000);
+			);
+			runningJob = {
+				id: '',
+				status: 'pending',
+				progress: 0,
+				message: 'Queued',
+			};
 		} catch (err) {
 			showProgress = false;
 			runningJob = null;
@@ -151,58 +209,41 @@
 	}
 
 	function stopFullPipeline() {
-		if (pollInterval) clearInterval(pollInterval);
-		pollInterval = null;
 		showProgress = false;
 		runningJob = null;
+		fullJobPreviewUrl = null;
+		if (fullJobObjectUrl) {
+			URL.revokeObjectURL(fullJobObjectUrl);
+			fullJobObjectUrl = null;
+		}
+		try {
+			ws?.send(JSON.stringify({ action: 'cancel' }));
+		} catch {
+			// ignore
+		}
+	}
+
+	function openWsIfNeeded() {
+		if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+		ws = new WebSocket(wsUrl());
+		ws.binaryType = 'blob';
+		ws.onmessage = handleWsMessage;
+		ws.onerror = () => {
+			error = 'WebSocket error. Is the Python server running?';
+			liveError = error;
+			stopLive();
+		};
+		ws.onclose = () => {
+			stopLive();
+		};
 	}
 
 	function connectLive() {
 		liveError = '';
 		liveMeta = null;
-		ws = new WebSocket('ws://localhost:8000');
-		ws.binaryType = 'blob';
-
-		ws.onopen = () => {
-			ws?.send(JSON.stringify({ action: 'configure', options: { device: 'cuda' } }));
-			startCapture();
-		};
-
-		ws.onmessage = (event) => {
-			if (typeof event.data === 'string') {
-				try {
-					const payload = JSON.parse(event.data) as { type: string } & Partial<LiveMetadata>;
-					if (payload.type === 'metadata') {
-						liveMeta = payload as unknown as LiveMetadata;
-					}
-				} catch {
-					// ignore non-JSON text
-				}
-			} else if (event.data instanceof Blob) {
-				if (objectUrl) URL.revokeObjectURL(objectUrl);
-				objectUrl = URL.createObjectURL(event.data);
-				const ctx = outputCtx;
-				const canvas = outputCanvas;
-				if (ctx && canvas) {
-					const img = new Image();
-					img.onload = () => {
-						canvas.width = img.naturalWidth;
-						canvas.height = img.naturalHeight;
-						ctx.drawImage(img, 0, 0);
-					};
-					img.src = objectUrl;
-				}
-			}
-		};
-
-		ws.onerror = () => {
-			liveError = 'WebSocket error. Is `uv run inference live` running on port 8000?';
-			stopLive();
-		};
-
-		ws.onclose = () => {
-			stopLive();
-		};
+		openWsIfNeeded();
+		ws?.send(JSON.stringify({ action: 'configure', options: { device } }));
+		startCapture();
 	}
 
 	async function startLive() {
@@ -304,24 +345,13 @@
 
 	onMount(() => {
 		loadRuns();
-		const canvas = outputCanvas;
-		if (canvas) {
-			outputCtx = canvas.getContext('2d');
-		}
+		ensureOutputCtx();
 		return () => {
 			stopFullPipeline();
 			stopLive();
 		};
 	});
 </script>
-
-<svelte:head>
-	<title>FootballAI Overlay Lab</title>
-	<meta
-		name="description"
-		content="Run football player detection overlays on YouTube clips or live streams."
-	/>
-</svelte:head>
 
 <main class="shell">
 	<header class="topbar">
@@ -385,6 +415,11 @@
 						<div class="progress-fill" style={`width: ${runningJob.progress}%`}></div>
 					</div>
 					<p class="muted">{runningJob.progress}% — {runningJob.status}</p>
+					{#if fullJobPreviewUrl}
+						<div class="preview-frame">
+							<img src={fullJobPreviewUrl} alt="latest preview" />
+						</div>
+					{/if}
 					<button type="button" class="secondary" onclick={stopFullPipeline}>Close</button>
 				</div>
 			</div>
@@ -462,7 +497,7 @@
 						<section class="panel">
 							<h2>Pipeline</h2>
 							<code>
-								uv run inference full --input {selectedRun?.video.replace('/media/', 'data/outputs/').replace('_overlay.mp4', '.mp4') ?? 'data/raw/clip.mp4'} --output {selectedRun?.video.replace('/media/', 'data/outputs/') ?? 'data/outputs/overlay.mp4'}
+								uv run inference full --input data/raw/clip.mp4 --output {selectedRun?.video ?? 'data/outputs/overlay.mp4'}
 							</code>
 							{#if selectedRun?.csv}
 								<a href={selectedRun.csv}>Download CSV</a>
@@ -478,8 +513,7 @@
 			<h2>Stream a source and get annotated frames back</h2>
 			<p class="muted">
 				Paste an HLS / DASH / MP4 stream URL, or type <code>0</code> or <code>webcam</code> for your camera.
-				The browser captures frames and sends them to the Python WebSocket server on
-				<code>ws://localhost:8000</code>.
+				The browser captures frames and sends them to the Python WebSocket server.
 			</p>
 			<div class="form-grid">
 				<label class="field span-2">
@@ -886,7 +920,9 @@
 		border: 1px solid #26302c;
 		border-radius: 10px;
 		padding: 24px;
-		width: min(420px, 90vw);
+		width: min(520px, 90vw);
+		max-height: 90vh;
+		overflow: auto;
 	}
 
 	.modal .status {
@@ -906,6 +942,20 @@
 		height: 100%;
 		background: #77c996;
 		transition: width 0.2s ease;
+	}
+
+	.preview-frame {
+		margin: 14px 0;
+		border: 1px solid #26302c;
+		border-radius: 8px;
+		overflow: hidden;
+		background: #050706;
+	}
+
+	.preview-frame img {
+		width: 100%;
+		height: auto;
+		display: block;
 	}
 
 	@media (max-width: 900px) {

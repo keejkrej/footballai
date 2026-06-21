@@ -1,20 +1,19 @@
 # FootballAI
 
-A Turbo + uv monorepo that combines a SvelteKit dashboard with Python-based
-football video analysis. The Python layer uses the **Roboflow sports** YOLOv8
-soccer stack (player, pitch, ball, and team classification). The webapp provides
-two modes:
+A Turbo + uv monorepo that combines a Svelte SPA with Python-based football
+video analysis. The Python layer uses the **Roboflow sports** YOLOv8 soccer stack
+(player, pitch, ball, and team classification). The webapp provides two modes:
 
-- **Full**: paste a YouTube link, the TypeScript backend downloads the clip and
-  runs the full Python inference pipeline, then plays the annotated MP4.
+- **Full**: paste a YouTube link, the Python WebSocket server downloads the clip
+  and runs the full inference pipeline, then the SPA plays the annotated MP4.
 - **Live**: paste any stream URL the browser can play (or use your webcam), the
-  browser captures frames, sends them to a local Python WebSocket server, and
+  browser captures frames, sends them to the Python WebSocket server, and
   displays the annotated frames + live metrics.
 
 ```
 footballai/
 ├── apps/
-│   └── web/                 # SvelteKit frontend + API routes
+│   └── web/                 # Svelte SPA (Vite + Svelte 5)
 ├── packages/
 │   └── footballai/          # Python inference package
 ├── data/
@@ -29,7 +28,7 @@ footballai/
 - Node.js 20+ and pnpm
 - Python 3.12 (managed by uv)
 - NVIDIA GPU recommended (`--device cuda` is the default)
-- `yt-dlp` on PATH for the webapp to download YouTube clips
+- Nginx (or any static file server) for serving the built SPA
 
 ## Install
 
@@ -37,12 +36,12 @@ footballai/
 # JavaScript workspace
 pnpm install
 
-# Python workspace (installs the footballai package and all dependencies)
+# Python workspace
 uv sync --all-packages
 ```
 
-Models are downloaded automatically on the first `inference full` or
-`inference live` run. You can also trigger it explicitly:
+Models are downloaded automatically on the first inference run. You can also
+trigger it explicitly:
 
 ```bash
 uv run python -m footballai.setup_sports_models
@@ -50,7 +49,7 @@ uv run python -m footballai.setup_sports_models
 
 ## Python CLI
 
-The Python package exposes exactly one command with two subcommands:
+The Python package exposes two entry points:
 
 ```bash
 # Render a full overlay for a local MP4
@@ -59,8 +58,11 @@ uv run inference full \
   --output data/outputs/overlay.mp4 \
   --csv data/outputs/positions.csv
 
-# Start the live WebSocket server
+# Start the live WebSocket server (frame-in / frame-out)
 uv run inference live --host 0.0.0.0 --port 8000
+
+# Start the unified WebSocket server used by the web UI
+uv run web --port 8000
 ```
 
 ### Common options
@@ -82,57 +84,104 @@ uv run inference live --host 0.0.0.0 --port 8000
 | `--csv` | Output detections CSV path |
 | `--max-frames` | Maximum source frames to process (0 = unlimited) |
 | `--stride` | Process every Nth source frame |
+| `--batch-size` | Frames per GPU forward pass |
 | `--team-sample-stride` | Frame stride for collecting team training crops |
 | `--siglip-batch-size` | Batch size for SigLIP feature extraction |
 
-### `inference live` options
+### `inference live` / `web` options
 
 | Option | Description |
 |---|---|
 | `--host` | WebSocket server host (default: `0.0.0.0`) |
 | `--port` | WebSocket server port (default: `8000`) |
 
-The live server accepts raw JPEG frames over the WebSocket and returns an
-annotated JPEG frame plus JSON metadata. It expects a `configure` message first
-and a `stop` message to end the session:
+The `web` server accepts raw JPEG frames over the WebSocket and returns an
+annotated JPEG frame plus JSON metadata. It also accepts JSON commands for full
+jobs:
 
 ```json
-{"action": "configure", "options": {}}
+{"action": "configure", "options": {"device": "cuda"}}
+{"action": "full", "youtubeUrl": "...", "start": "00:00:00", "end": "00:02:00"}
 {"action": "stop"}
 ```
 
 ## Webapp
 
-Start the SvelteKit dev server:
+### Build
 
 ```bash
-pnpm dev
+pnpm --filter @footballai/web build
 ```
 
-Then open http://localhost:5173.
+The static assets land in `apps/web/dist`.
+
+### Serve
+
+Point Nginx (or your static server of choice) at `apps/web/dist` and proxy
+`/ws` to the Python WebSocket server. Example Nginx config:
+
+```nginx
+server {
+    listen 80;
+    server_name localhost;
+
+    root /home/jack/workspace/footballai_main/apps/web/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400s;
+    }
+
+    location /media {
+        alias /home/jack/workspace/footballai_main/data/outputs;
+    }
+}
+```
+
+Start the Python WebSocket server:
+
+```bash
+uv run web --port 8000
+```
+
+Then open the static server URL (e.g. `http://localhost`).
+
+### Dev mode
+
+For development you can use Vite directly and proxy `/ws` to the Python server:
+
+```bash
+uv run web --port 8000     # in one shell
+pnpm --filter @footballai/web dev   # in another shell
+```
+
+Configure the WebSocket URL by setting `window.__FOOTBALLAI_WS__ = "ws://localhost:8000"`
+in `index.html` or in your proxy/Vite config.
 
 ### Full mode
 
 1. Paste a YouTube URL.
 2. Optionally set start/end timestamps.
 3. Click **Run pipeline**.
-4. A progress modal shows the download and inference status.
+4. A progress modal shows download + inference status.
 5. When finished, the generated overlay appears in the runs list and the video
    player plays the annotated MP4.
 
-The pipeline is orchestrated by the webapp: it spawns `yt-dlp` to download the
-clip, then spawns `uv run inference full ...` and streams progress via stdout.
-
 ### Live mode
 
-1. Make sure the Python WebSocket server is running:
-   ```bash
-   uv run inference live --port 8000
-   ```
+1. Make sure the Python WebSocket server is running.
 2. Paste a stream URL (HLS `.m3u8`, MP4, WebM, etc.) or type `0`/`webcam`.
 3. Click **Start live**.
-4. The browser plays the stream, captures frames, sends them to the Python
-   server, and renders the returned annotated frames.
+4. The browser plays the stream, captures frames, sends them to Python, and
+   renders the returned annotated frames.
 
 ### Stream compatibility note (e.g. ZDF World Cup streams)
 
@@ -150,6 +199,21 @@ terms of service and applicable copyright law. This app is intended for:
 - Unencrypted practice/test HLS streams
 - Your own webcam or local video files
 
+## Headless capture
+
+For streams that only work inside a browser, use the Playwright-based headless
+capture CLI:
+
+```bash
+uv run inference-live-capture \
+  --url "https://example.com/stream.m3u8" \
+  --ws ws://localhost:8000 \
+  --fps 5
+```
+
+This launches a headless Chromium instance, captures `<video>` frames, and feeds
+them directly to the Python WebSocket server.
+
 ## Data layout
 
 - `data/raw/` — downloaded source videos
@@ -163,12 +227,13 @@ repo root.
 ## Useful workspace commands
 
 ```bash
-pnpm dev        # start the SvelteKit app
-pnpm build      # build all workspace packages
-pnpm check      # run TypeScript checks
+pnpm dev                         # start the Svelte SPA dev server
+pnpm --filter @footballai/web build
+pnpm --filter @footballai/web check
 ```
 
 ```bash
 uv run inference full --help
 uv run inference live --help
+uv run web --help
 ```

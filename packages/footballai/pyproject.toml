@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 inference = "footballai.cli:main"
 inference-live-capture = "footballai.headless_capture:main"
+web = "footballai.web_server:main"
 
 [project.optional-dependencies]
 dev = [
