@@ -14,12 +14,25 @@ Outputs:
 
 The public entry point is :func:`run_full`; see also :class:`SportsProcessor` for
 single-frame processing used by the live WebSocket server.
+
+Performance optimizations
+-----------------------
+- Frame decoding runs in a dedicated thread so the GPU does not wait on OpenCV.
+- Player/pitch models process a batch of frames per forward pass (``--batch-size``).
+- Team classifier is cached to disk after fitting so repeated runs skip the CPU
+  warm-up.
+- Video writing and CSV serialization run in background writer threads.
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import pickle
+import queue
+import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
@@ -120,7 +133,6 @@ def _render_radar(
             radar = draw_points_on_pitch(
                 config=CONFIG, xy=points, face_color=color, radius=20, pitch=radar
             )
-    # Referee color index 3
     referee_points = transformed_xy[color_lookup == REFEREE_CLASS_ID]
     if len(referee_points):
         radar = draw_points_on_pitch(
@@ -197,9 +209,6 @@ class TeamClassifierState:
     def predict(self, crops: list[np.ndarray]) -> np.ndarray:
         if not crops:
             return np.array([], dtype=int)
-        # UMAP.transform is very slow for single samples; process at least 4
-        # crops together by padding with a blank crop if needed. This keeps
-        # per-frame latency reasonable without changing results.
         min_batch = 4
         pad_count = max(0, min_batch - len(crops))
         padded_crops = crops + [np.zeros((40, 40, 3), dtype=np.uint8)] * pad_count
@@ -209,6 +218,34 @@ class TeamClassifierState:
         projections = self.reducer.transform(features)
         labels = self.cluster_model.predict(projections)
         return labels[: len(crops)]
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(
+                {
+                    "processor": self.processor,
+                    "siglip_model": self.siglip_model,
+                    "reducer": self.reducer,
+                    "cluster_model": self.cluster_model,
+                    "device": self.device,
+                    "siglip_batch_size": self.siglip_batch_size,
+                },
+                f,
+            )
+
+    @classmethod
+    def load(cls, path: Path) -> "TeamClassifierState":
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        return cls(
+            processor=data["processor"],
+            siglip_model=data["siglip_model"],
+            reducer=data["reducer"],
+            cluster_model=data["cluster_model"],
+            device=data["device"],
+            siglip_batch_size=data["siglip_batch_size"],
+        )
 
 
 def _build_team_classifier(
@@ -220,11 +257,7 @@ def _build_team_classifier(
     max_frames: int,
     siglip_batch_size: int,
 ) -> TeamClassifierState:
-    """Fit a team classifier on all player crops and return a reusable predictor.
-
-    This batches both model inference and UMAP/KMeans so it is much faster than
-    predicting per-frame.
-    """
+    """Fit a team classifier on player crops and return a reusable predictor."""
     from sklearn.cluster import KMeans
     import umap
 
@@ -355,10 +388,7 @@ def _nearest_player_to_ball(players: sv.Detections, ball_xy: np.ndarray) -> sv.D
 
 
 class SportsProcessor:
-    """Encapsulates the Roboflow sports YOLOv8 inference pipeline for a single source.
-
-    Used by both the full-file overlay renderer and the live WebSocket server.
-    """
+    """Encapsulates the Roboflow sports YOLOv8 inference pipeline for a single source."""
 
     def __init__(
         self,
@@ -401,7 +431,7 @@ class SportsProcessor:
         self.ball_model.conf = self.conf
 
         def ball_callback(image_slice: np.ndarray) -> sv.Detections:
-            result = self.ball_model(image_slice, imgsz=640, verbose=False, device=self.device)[0]  # type: ignore[union-attr]
+            result = self.ball_model(image_slice, imgsz=640, verbose=False, device=self.device)[0]
             return sv.Detections.from_ultralytics(result)
 
         self.ball_slicer = sv.InferenceSlicer(
@@ -453,6 +483,19 @@ class SportsProcessor:
             ids.append(0 if np.linalg.norm(gk_xy - team_0_centroid) < np.linalg.norm(gk_xy - team_1_centroid) else 1)
         return np.array(ids, dtype=int)
 
+    def _lookup_team_id(self, frame: np.ndarray, players: sv.Detections, goalkeepers: sv.Detections, referees: sv.Detections) -> list[list[int]]:
+        if self.team_classifier is not None and len(players):
+            player_crops = _get_crops(frame, players)
+            players_team_id = self.team_classifier.predict(player_crops)
+            goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id, goalkeepers)
+            return [players_team_id.tolist(), goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
+        if self._team_classifier_state is not None and len(players):
+            player_crops = _get_crops(frame, players)
+            players_team_id = self._team_classifier_state.predict(player_crops)
+            goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id, goalkeepers)
+            return [players_team_id.tolist(), goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
+        return [[PLAYER_CLASS_ID] * len(players), [GOALKEEPER_CLASS_ID] * len(goalkeepers), [REFEREE_CLASS_ID] * len(referees)]
+
     def process_frame(self, frame: np.ndarray, frame_idx: int, fps: float) -> tuple[list[dict], np.ndarray, dict]:
         if self.player_model is None or self.pitch_model is None or self.ball_model is None or self.ball_slicer is None:
             raise RuntimeError("Models not loaded. Call load_models() first.")
@@ -470,20 +513,7 @@ class SportsProcessor:
         goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
         referees = detections[detections.class_id == REFEREE_CLASS_ID]
 
-        color_lookup_parts: list[list[int]] = []
-        if self.team_classifier is not None and len(players):
-            player_crops = _get_crops(frame, players)
-            players_team_id = self.team_classifier.predict(player_crops)
-            goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id, goalkeepers)
-            color_lookup_parts = [players_team_id.tolist(), goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
-        elif self._team_classifier_state is not None and len(players):
-            player_crops = _get_crops(frame, players)
-            players_team_id = self._team_classifier_state.predict(player_crops)
-            goalkeepers_team_id = self._resolve_goalkeepers_team_id(players, players_team_id, goalkeepers)
-            color_lookup_parts = [players_team_id.tolist(), goalkeepers_team_id.tolist(), [REFEREE_CLASS_ID] * len(referees)]
-        else:
-            color_lookup_parts = [[PLAYER_CLASS_ID] * len(players), [GOALKEEPER_CLASS_ID] * len(goalkeepers), [REFEREE_CLASS_ID] * len(referees)]
-
+        color_lookup_parts = self._lookup_team_id(frame, players, goalkeepers, referees)
         merged = sv.Detections.merge([players, goalkeepers, referees])
         color_lookup = np.array([idx for part in color_lookup_parts for idx in part], dtype=int)
 
@@ -499,7 +529,6 @@ class SportsProcessor:
         if len(ball_dets):
             annotated = BALL_ANNOTATOR.annotate(annotated, ball_dets)
 
-        # Possession marker
         ball_xy = ball_dets.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER) if len(ball_dets) else None
         possession: dict | None = None
         if ball_xy is not None and len(players):
@@ -507,14 +536,14 @@ class SportsProcessor:
             if holder is not None:
                 hx, hy = holder.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[0]
                 cv2.circle(annotated, (int(hx), int(hy)), 8, (0, 0, 255), 2)
-                holder_record = next(
-                    (r for r in _detections_to_records(merged, keypoints, color_lookup, None, frame_idx, fps, width, height)
-                     if int(r["track_id"]) == int(holder.tracker_id[0])), None
-                ) if merged.tracker_id is not None else None
-                if holder_record:
-                    possession = {"class_name": holder_record["class_name"], "team_id": holder_record["team_id"]}
+                if merged.tracker_id is not None:
+                    holder_record = next(
+                        (r for r in _detections_to_records(merged, keypoints, color_lookup, None, frame_idx, fps, width, height)
+                         if int(r["track_id"]) == int(holder.tracker_id[0])), None
+                    )
+                    if holder_record:
+                        possession = {"class_name": holder_record["class_name"], "team_id": holder_record["team_id"]}
 
-        # Radar overlay
         try:
             radar = _render_radar(merged, keypoints, color_lookup, ball_xy)
             radar = sv.resize_image(radar, (width // 3, height // 3))
@@ -524,7 +553,6 @@ class SportsProcessor:
         except ValueError:
             pass
 
-        # Headline
         counts = {
             "player": int((merged.class_id == PLAYER_CLASS_ID).sum()),
             "goalkeeper": int((merged.class_id == GOALKEEPER_CLASS_ID).sum()),
@@ -543,9 +571,234 @@ class SportsProcessor:
 
         return records, annotated, {"counts": counts, "possession": possession}
 
+    def process_batch(
+        self, frames: list[tuple[int, np.ndarray]], fps: float
+    ) -> list[tuple[int, list[dict], np.ndarray, dict]]:
+        """Run batched player/pitch inference on a list of (frame_idx, frame) pairs.
+
+        Returns one result tuple per input frame in the same order.
+        """
+        if self.player_model is None or self.pitch_model is None or self.ball_model is None or self.ball_slicer is None:
+            raise RuntimeError("Models not loaded. Call load_models() first.")
+
+        if not frames:
+            return []
+
+        indices = [idx for idx, _ in frames]
+        frame_array = [frame for _, frame in frames]
+
+        # Batched forward passes on GPU
+        player_results = self.player_model(frame_array, imgsz=self.img_size, verbose=False, device=self.device)
+        pitch_results = self.pitch_model(frame_array, verbose=False, device=self.device)
+
+        results: list[tuple[int, list[dict], np.ndarray, dict]] = []
+        for idx, frame, player_result, pitch_result in zip(indices, frame_array, player_results, pitch_results, strict=False):
+            height, width = frame.shape[:2]
+            keypoints = sv.KeyPoints.from_ultralytics(pitch_result)
+
+            detections = sv.Detections.from_ultralytics(player_result)
+            detections = self.byte_tracker.update_with_detections(detections)
+
+            players = detections[detections.class_id == PLAYER_CLASS_ID]
+            goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
+            referees = detections[detections.class_id == REFEREE_CLASS_ID]
+
+            color_lookup_parts = self._lookup_team_id(frame, players, goalkeepers, referees)
+            merged = sv.Detections.merge([players, goalkeepers, referees])
+            color_lookup = np.array([idx for part in color_lookup_parts for idx in part], dtype=int)
+
+            ball_dets = _detect_ball(frame, self.ball_slicer, self.ball_tracker)
+
+            annotated = frame.copy()
+            if len(merged):
+                annotated = ELLIPSE_ANNOTATOR.annotate(annotated, merged, custom_color_lookup=color_lookup)
+                labels = [str(tid) for tid in merged.tracker_id]
+                annotated = ELLIPSE_LABEL_ANNOTATOR.annotate(
+                    annotated, merged, labels=labels, custom_color_lookup=color_lookup
+                )
+            if len(ball_dets):
+                annotated = BALL_ANNOTATOR.annotate(annotated, ball_dets)
+
+            ball_xy = ball_dets.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER) if len(ball_dets) else None
+            possession: dict | None = None
+            if ball_xy is not None and len(players):
+                holder = _nearest_player_to_ball(players, ball_xy[0])
+                if holder is not None:
+                    hx, hy = holder.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[0]
+                    cv2.circle(annotated, (int(hx), int(hy)), 8, (0, 0, 255), 2)
+                    if merged.tracker_id is not None:
+                        holder_record = next(
+                            (r for r in _detections_to_records(merged, keypoints, color_lookup, None, idx, fps, width, height)
+                             if int(r["track_id"]) == int(holder.tracker_id[0])), None
+                        )
+                        if holder_record:
+                            possession = {"class_name": holder_record["class_name"], "team_id": holder_record["team_id"]}
+
+            try:
+                radar = _render_radar(merged, keypoints, color_lookup, ball_xy)
+                radar = sv.resize_image(radar, (width // 3, height // 3))
+                radar_h, radar_w, _ = radar.shape
+                rect = sv.Rect(x=16, y=height - radar_h - 16, width=radar_w, height=radar_h)
+                annotated = sv.draw_image(annotated, radar, opacity=0.5, rect=rect)
+            except ValueError:
+                pass
+
+            counts = {
+                "player": int((merged.class_id == PLAYER_CLASS_ID).sum()),
+                "goalkeeper": int((merged.class_id == GOALKEEPER_CLASS_ID).sum()),
+                "referee": int((merged.class_id == REFEREE_CLASS_ID).sum()),
+                "ball": len(ball_dets),
+            }
+            headline = (
+                f"players: {counts['player']}  gk: {counts['goalkeeper']}  "
+                f"ref: {counts['referee']}  ball: {counts['ball']}"
+            )
+            cv2.putText(annotated, headline, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
+            records = _detections_to_records(
+                merged, keypoints, color_lookup, ball_dets, idx, fps, width, height
+            )
+            results.append((idx, records, annotated, {"counts": counts, "possession": possession}))
+
+        return results
+
 
 def _default_progress(progress: dict) -> None:
     print(json.dumps({"type": "progress", **progress}), flush=True)
+
+
+def _team_cache_path(
+    video_path: Path, cache_dir: Path, img_size: int, conf: float, team_sample_stride: int
+) -> Path:
+    key = f"{video_path.resolve()}:{img_size}:{conf}:{team_sample_stride}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+    return cache_dir / f"team_classifier_{digest}.pkl"
+
+
+class _FrameReader(threading.Thread):
+    """Decode frames in a background thread and push them into a queue."""
+
+    def __init__(
+        self,
+        video_path: Path,
+        stride: int,
+        max_frames: int,
+        queue_size: int,
+    ):
+        super().__init__(daemon=True)
+        self.video_path = video_path
+        self.stride = stride
+        self.max_frames = max_frames
+        self.frame_queue: queue.Queue[tuple[int, np.ndarray] | None] = queue.Queue(maxsize=queue_size)
+        self.fps = 25.0
+        self.width = 0
+        self.height = 0
+        self.total = 0
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        cap = cv2.VideoCapture(str(self.video_path))
+        if not cap.isOpened():
+            self.error = RuntimeError(f"Could not open video: {self.video_path}")
+            self.frame_queue.put(None)
+            return
+
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+        self.total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+        frame_idx = 0
+        emitted = 0
+        while self.max_frames <= 0 or frame_idx < self.max_frames:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if frame_idx % self.stride != 0:
+                frame_idx += 1
+                continue
+            self.frame_queue.put((frame_idx, frame))
+            emitted += 1
+            frame_idx += 1
+        cap.release()
+        self.frame_queue.put(None)
+
+
+class _VideoWriterThread(threading.Thread):
+    """Consume ordered frames from a queue and write them to a video file."""
+
+    def __init__(
+        self,
+        output_path: Path,
+        fps: float,
+        size: tuple[int, int],
+        queue_size: int,
+    ):
+        super().__init__(daemon=True)
+        self.output_path = output_path
+        self.fps = fps
+        self.size = size
+        self.queue: queue.Queue[tuple[int, np.ndarray] | None] = queue.Queue(maxsize=queue_size)
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        try:
+            writer = cv2.VideoWriter(
+                str(self.output_path),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                self.fps,
+                self.size,
+            )
+            buffer: dict[int, np.ndarray] = {}
+            next_idx = 0
+            while True:
+                item = self.queue.get()
+                if item is None:
+                    break
+                idx, frame = item
+                buffer[idx] = frame
+                while next_idx in buffer:
+                    writer.write(buffer.pop(next_idx))
+                    next_idx += 1
+            writer.release()
+        except Exception as exc:
+            self.error = exc
+
+
+class _CsvWriterThread(threading.Thread):
+    """Consume ordered records from a queue and write them to a CSV file."""
+
+    def __init__(
+        self,
+        csv_path: Path,
+        fieldnames: list[str],
+        queue_size: int,
+    ):
+        super().__init__(daemon=True)
+        self.csv_path = csv_path
+        self.fieldnames = fieldnames
+        self.queue: queue.Queue[tuple[int, list[dict]] | None] = queue.Queue(maxsize=queue_size)
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        try:
+            with self.csv_path.open("w", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=self.fieldnames)
+                writer.writeheader()
+                buffer: dict[int, list[dict]] = {}
+                next_idx = 0
+                while True:
+                    item = self.queue.get()
+                    if item is None:
+                        break
+                    idx, records = item
+                    buffer[idx] = records
+                    while next_idx in buffer:
+                        for record in buffer.pop(next_idx):
+                            writer.writerow(record)
+                        next_idx += 1
+        except Exception as exc:
+            self.error = exc
 
 
 def run_full(
@@ -559,15 +812,21 @@ def run_full(
     img_size: int = 1280,
     max_frames: int = 0,
     stride: int = 1,
+    batch_size: int = 4,
     skip_team_fit: bool = False,
     team_sample_stride: int = STRIDE,
     siglip_batch_size: int = 64,
+    team_cache: bool = True,
+    team_cache_dir: Path | str = REPO_ROOT / "data" / "cache" / "team_classifier",
+    decoder_queue_size: int = 32,
+    writer_queue_size: int = 32,
     on_progress: Callable[[dict], None] | None = None,
 ) -> None:
     """Render the full sports overlay for a local MP4 file and write a CSV."""
     input_path = Path(input_path)
     output_path = Path(output_path)
     csv_path = Path(csv_path)
+    team_cache_dir = Path(team_cache_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -586,26 +845,36 @@ def run_full(
         siglip_batch_size=siglip_batch_size,
     )
     processor.load_models()
+
+    # Team classifier with disk cache
     if not skip_team_fit:
-        processor.fit_team_classifier_from_video(str(input_path), max_frames=300)
+        cache_path = _team_cache_path(input_path, team_cache_dir, img_size, conf, team_sample_stride)
+        if team_cache and cache_path.exists():
+            print(f"Loading cached team classifier from {cache_path}")
+            try:
+                processor._team_classifier_state = TeamClassifierState.load(cache_path)
+                processor._team_fit_done = True
+            except Exception as exc:
+                print(f"Failed to load team classifier cache: {exc}; refitting...")
+                processor._team_fit_done = False
+        if not processor._team_fit_done:
+            processor.fit_team_classifier_from_video(str(input_path), max_frames=300)
+            if team_cache and processor._team_classifier_state is not None:
+                processor._team_classifier_state.save(cache_path)
 
-    video_info = sv.VideoInfo.from_video_path(str(input_path))
-    cap = cv2.VideoCapture(str(input_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {input_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or video_info.fps or 25.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or video_info.width
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or video_info.height
+    # Start async frame decoder
+    reader = _FrameReader(input_path, stride, max_frames, decoder_queue_size)
+    reader.start()
+    reader.join(timeout=0.1)  # let it open and set metadata
+    while reader.fps == 25.0 and reader.is_alive():
+        reader.join(timeout=0.05)
+    fps = reader.fps
+    width = reader.width or 1280
+    height = reader.height or 720
+    total = reader.total if max_frames <= 0 else min(max_frames, reader.total or 0)
     out_fps = max(1.0, fps / max(1, stride))
 
-    writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        out_fps,
-        (width, height),
-    )
-
+    # Start async writers
     fieldnames = [
         "frame",
         "time_sec",
@@ -622,55 +891,80 @@ def run_full(
         "y2",
         "confidence",
     ]
+    video_writer = _VideoWriterThread(output_path, out_fps, (width, height), writer_queue_size)
+    csv_writer = _CsvWriterThread(csv_path, fieldnames, writer_queue_size)
+    video_writer.start()
+    csv_writer.start()
 
     possession_buffer: deque[dict] = deque(maxlen=5)
+    processed = 0
+    finished = False
+    pbar = tqdm(total=total if total > 0 else None, desc="overlay")
+    decode_fps = 0.0
+    inference_fps = 0.0
 
-    with csv_path.open("w", newline="") as csv_file:
-        csv_writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        csv_writer.writeheader()
+    decode_times: deque[float] = deque(maxlen=20)
+    infer_times: deque[float] = deque(maxlen=20)
 
-        frame_idx = 0
-        processed = 0
-        total = max_frames if max_frames > 0 else int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-        pbar = tqdm(total=total if total > 0 else None, desc="overlay")
-
-        while max_frames <= 0 or frame_idx < max_frames:
-            ok, frame = cap.read()
-            if not ok:
+    while not finished:
+        batch: list[tuple[int, np.ndarray]] = []
+        decode_start = time.time()
+        while len(batch) < batch_size:
+            item = reader.frame_queue.get()
+            if item is None:
+                finished = True
                 break
-            if frame_idx % stride != 0:
-                frame_idx += 1
-                continue
+            batch.append(item)
+        decode_elapsed = time.time() - decode_start
+        if batch:
+            decode_times.append(decode_elapsed / len(batch))
+            decode_fps = 1.0 / (sum(decode_times) / len(decode_times)) if decode_times else 0.0
 
-            records, annotated, meta = processor.process_frame(frame, frame_idx, fps)
-            for record in records:
-                csv_writer.writerow(record)
+        if not batch:
+            continue
 
-            # Simple possession buffer for progress metadata
-            if meta["possession"]:
+        infer_start = time.time()
+        results = processor.process_batch(batch, fps)
+        infer_elapsed = time.time() - infer_start
+        infer_times.append(infer_elapsed / len(batch))
+        inference_fps = len(batch) / infer_elapsed
+
+        for frame_idx, records, annotated, meta in results:
+            if meta.get("possession"):
                 possession_buffer.append(meta["possession"])
-
-            writer.write(annotated)
+            video_writer.queue.put((frame_idx, annotated))
+            csv_writer.queue.put((frame_idx, records))
             processed += 1
 
-            if processed % 10 == 0:
-                emit(
-                    {
-                        "stage": "inference",
-                        "frame": frame_idx,
-                        "processed": processed,
-                        "total": total if total > 0 else None,
-                        "classes": meta["counts"],
-                    }
-                )
+        if processed % 10 == 0:
+            emit(
+                {
+                    "stage": "inference",
+                    "frame": frame_idx,
+                    "processed": processed,
+                    "total": total if total > 0 else None,
+                    "classes": meta["counts"],
+                    "decode_fps": round(decode_fps, 1),
+                    "inference_fps": round(inference_fps, 1),
+                }
+            )
 
-            frame_idx += 1
-            pbar.update(1)
+        pbar.update(len(batch))
 
-        pbar.close()
+    pbar.close()
 
-    cap.release()
-    writer.release()
+    # Flush writers
+    video_writer.queue.put(None)
+    csv_writer.queue.put(None)
+    video_writer.join()
+    csv_writer.join()
+
+    if reader.error:
+        raise reader.error
+    if video_writer.error:
+        raise video_writer.error
+    if csv_writer.error:
+        raise csv_writer.error
 
     emit({"stage": "done", "output": str(output_path), "csv": str(csv_path), "processed": processed})
     print(f"Wrote overlay video: {output_path}")

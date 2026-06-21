@@ -34,8 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     full.add_argument("--csv", required=True, help="Output detections CSV path")
     full.add_argument("--max-frames", type=int, default=0, help="Maximum source frames to process (0 = unlimited)")
     full.add_argument("--stride", type=int, default=1, help="Process every Nth source frame")
+    full.add_argument("--batch-size", type=int, default=4, help="Frames per GPU forward pass for player/pitch models")
     full.add_argument("--team-sample-stride", type=int, default=60, help="Frame stride for collecting team training crops")
     full.add_argument("--siglip-batch-size", type=int, default=64, help="Batch size for SigLIP feature extraction")
+    full.add_argument("--team-cache", action=argparse.BooleanOptionalAction, default=True, help="Cache fitted team classifier to disk")
+    full.add_argument("--team-cache-dir", default=str(REPO_ROOT / "data" / "cache" / "team_classifier"), help="Directory for team classifier cache")
+    full.add_argument("--decoder-queue-size", type=int, default=32, help="Max decoded frames queued ahead of inference")
+    full.add_argument("--writer-queue-size", type=int, default=32, help="Max annotated frames queued for video/CSV writers")
     _add_common_args(full)
 
     live = subparsers.add_parser("live", help="Start a WebSocket server for live frame-in/frame-out inference")
@@ -64,9 +69,14 @@ def main() -> None:
             img_size=args.img_size,
             max_frames=args.max_frames,
             stride=args.stride,
+            batch_size=args.batch_size,
             skip_team_fit=args.skip_team_fit,
             team_sample_stride=args.team_sample_stride,
             siglip_batch_size=getattr(args, "siglip_batch_size", 64),
+            team_cache=args.team_cache,
+            team_cache_dir=args.team_cache_dir,
+            decoder_queue_size=args.decoder_queue_size,
+            writer_queue_size=args.writer_queue_size,
         )
     elif args.command == "live":
         run_live_server(
