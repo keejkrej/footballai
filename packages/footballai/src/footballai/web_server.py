@@ -347,6 +347,17 @@ async def _handle_connection(
 
                 threading.Thread(target=run_job, daemon=True).start()
                 continue
+            if action == "runs":
+                await send_json({"type": "runs", "runs": _load_runs()})
+                continue
+            if action == "job":
+                job_id = payload.get("id", "")
+                path = _job_path(job_id)
+                if path.exists():
+                    await send_json({"type": "job", "job": json.loads(path.read_text(encoding="utf-8"))})
+                else:
+                    await send_json({"type": "error", "message": "job not found"})
+                continue
 
             await send_json({"type": "error", "message": f"Unknown action: {action}"})
             continue

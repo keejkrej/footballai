@@ -1,20 +1,20 @@
 {
-	"compilerOptions": {
-		"target": "ESNext",
-		"useDefineForClassFields": true,
-		"module": "ESNext",
-		"resolveJsonModule": true,
-		"allowJs": true,
-		"checkJs": true,
-		"isolatedModules": true,
-		"moduleDetection": "force",
-		"moduleResolution": "bundler",
-		"strict": true,
-		"noEmit": true,
-		"skipLibCheck": true,
-		"sourceMap": true,
-		"types": ["node", "vite/client"],
-		"verbatimModuleSyntax": true
-	},
-	"include": ["src/**/*.ts", "src/**/*.svelte"]
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": ["node", "vite/client"],
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
 }

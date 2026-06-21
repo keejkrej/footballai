@@ -26,6 +26,7 @@ footballai/
 ## Prerequisites
 
 - Node.js 20+ and pnpm
+- [vite-plus](https://vite.plus) (`vp`) for the web toolchain
 - Python 3.12 (managed by uv)
 - NVIDIA GPU recommended (`--device cuda` is the default)
 - Nginx (or any static file server) for serving the built SPA
@@ -33,6 +34,9 @@ footballai/
 ## Install
 
 ```bash
+# Install the vite-plus CLI globally
+curl -fsSL https://vite.plus | bash
+
 # JavaScript workspace
 pnpm install
 
@@ -102,6 +106,8 @@ jobs:
 ```json
 {"action": "configure", "options": {"device": "cuda"}}
 {"action": "full", "youtubeUrl": "...", "start": "00:00:00", "end": "00:02:00"}
+{"action": "runs"}
+{"action": "job", "id": "..."}
 {"action": "stop"}
 ```
 
@@ -110,7 +116,8 @@ jobs:
 ### Build
 
 ```bash
-pnpm --filter @footballai/web build
+cd apps/web
+vp build
 ```
 
 The static assets land in `apps/web/dist`.
@@ -156,15 +163,15 @@ Then open the static server URL (e.g. `http://localhost`).
 
 ### Dev mode
 
-For development you can use Vite directly and proxy `/ws` to the Python server:
+For development you can use vite-plus and proxy `/ws` to the Python server:
 
 ```bash
 uv run web --port 8000     # in one shell
-pnpm --filter @footballai/web dev   # in another shell
+cd apps/web && vp dev      # in another shell
 ```
 
 Configure the WebSocket URL by setting `window.__FOOTBALLAI_WS__ = "ws://localhost:8000"`
-in `index.html` or in your proxy/Vite config.
+in `index.html` or in your Vite proxy config.
 
 ### Full mode
 
@@ -227,9 +234,10 @@ repo root.
 ## Useful workspace commands
 
 ```bash
-pnpm dev                         # start the Svelte SPA dev server
-pnpm --filter @footballai/web build
-pnpm --filter @footballai/web check
+cd apps/web && vp dev          # start the dev server
+cd apps/web && vp build        # build for production
+cd apps/web && vp check        # format, lint, and type checks
+cd apps/web && vp preview      # preview the built SPA
 ```
 
 ```bash

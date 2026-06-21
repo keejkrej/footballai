@@ -97,26 +97,25 @@
 		return outputCtx;
 	}
 
-	async function loadRuns() {
+	function requestRuns() {
 		loading = true;
 		error = '';
-		try {
-			const response = await fetch('/api/runs');
-			if (!response.ok) throw new Error(`Failed to load runs: ${response.status}`);
-			const data = (await response.json()) as { runs: RunSummary[] };
-			runs = data.runs;
-			selectedId = data.runs[0]?.id ?? '';
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to load runs';
-		} finally {
-			loading = false;
-		}
+		openWsIfNeeded();
+		ws?.send(JSON.stringify({ action: 'runs' }));
 	}
+
 
 	function handleWsMessage(event: MessageEvent<string | Blob>) {
 		if (typeof event.data === 'string') {
 			try {
 				const payload = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
+				if (payload.type === 'runs') {
+					const data = payload as unknown as { runs: RunSummary[] };
+					runs = data.runs;
+					selectedId = data.runs[0]?.id ?? '';
+					loading = false;
+					return;
+				}
 				if (payload.type === 'metadata') {
 					liveMeta = payload as unknown as LiveMetadata;
 				} else if (payload.type === 'job_progress') {
@@ -146,7 +145,7 @@
 								URL.revokeObjectURL(fullJobObjectUrl);
 								fullJobObjectUrl = null;
 							}
-							if (jobStatus === 'done') await loadRuns();
+							if (jobStatus === 'done') requestRuns();
 						}, 2000);
 					}
 				} else if (payload.type === 'error') {
@@ -344,7 +343,7 @@
 	}
 
 	onMount(() => {
-		loadRuns();
+		requestRuns();
 		ensureOutputCtx();
 		return () => {
 			stopFullPipeline();
