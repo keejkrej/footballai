@@ -34,9 +34,11 @@ from sports.common.team import TeamClassifier
 from sports.common.view import ViewTransformer
 from sports.configs.soccer import SoccerPitchConfiguration
 
+from footballai._paths import REPO_ROOT
+
 
 try:
-    from football_yolov5_overlay import (
+    from footballai.football_yolov5_overlay import (
         CLASS_COLORS,
         ball_holder,
         box_top_center,
@@ -96,12 +98,36 @@ def parse_args() -> argparse.Namespace:
         help="Video source: webcam index, file path, HLS .m3u8, RTMP, HTTP URL, or capture device",
     )
     parser.add_argument("--backend", choices=["yolov5", "sports"], default="sports", help="Inference backend")
-    parser.add_argument("--weights", default="models/football_yolov5_best.pt", help="YOLOv5 custom weights")
-    parser.add_argument("--yolov5-repo", default="external/yolov5", help="Local YOLOv5 repository path")
-    parser.add_argument("--models-dir", default="models", help="Directory containing YOLOv8 .pt weights for sports backend")
-    parser.add_argument("--state", default="data/live/latest.json", help="Rolling JSON state output")
-    parser.add_argument("--overlay-output", default="", help="Optional MP4 overlay recording path")
-    parser.add_argument("--detections-csv", default="", help="Optional rolling CSV output for sports backend")
+    parser.add_argument(
+        "--weights",
+        default=str(REPO_ROOT / "models/football_yolov5_best.pt"),
+        help="YOLOv5 custom weights",
+    )
+    parser.add_argument(
+        "--yolov5-repo",
+        default=str(REPO_ROOT / "external/yolov5"),
+        help="Local YOLOv5 repository path",
+    )
+    parser.add_argument(
+        "--models-dir",
+        default=str(REPO_ROOT / "models"),
+        help="Directory containing YOLOv8 .pt weights for sports backend",
+    )
+    parser.add_argument(
+        "--state",
+        default=str(REPO_ROOT / "data/live/latest.json"),
+        help="Rolling JSON state output",
+    )
+    parser.add_argument(
+        "--overlay-output",
+        default="",
+        help="Optional MP4 overlay recording path",
+    )
+    parser.add_argument(
+        "--detections-csv",
+        default="",
+        help="Optional rolling CSV output for sports backend",
+    )
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument("--img-size", type=int, default=1280, help="Inference image size")
     parser.add_argument("--stride", type=int, default=5, help="Run inference every Nth source frame")

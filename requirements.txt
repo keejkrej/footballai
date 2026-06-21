@@ -1,9 +1,0 @@
-opencv-python
-ultralytics
-numpy
-lap
-gdown
-tqdm
-torch
-git+https://github.com/roboflow/sports.git
-yt-dlp

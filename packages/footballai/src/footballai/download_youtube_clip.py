@@ -7,13 +7,19 @@ import argparse
 import subprocess
 from pathlib import Path
 
+from footballai._paths import REPO_ROOT
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="YouTube URL to download")
     parser.add_argument("--start", default="00:00:00", help="Start timestamp, HH:MM:SS")
     parser.add_argument("--end", default="00:02:00", help="End timestamp, HH:MM:SS")
-    parser.add_argument("--output", default="data/raw/youtube_clip.mp4", help="Output mp4 path")
+    parser.add_argument(
+        "--output",
+        default=str(REPO_ROOT / "data/raw/youtube_clip.mp4"),
+        help="Output mp4 path",
+    )
     return parser.parse_args()
 
 

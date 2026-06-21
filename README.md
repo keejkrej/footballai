@@ -1,213 +1,108 @@
-# footballai
+# FootballAI
 
-Hackathon prototype for extracting football game state from broadcast video and live streams.
+A Turbo + uv monorepo that combines a SvelteKit dashboard with Python-based football video analysis.
 
-## What is implemented
+```
+footballai/
+├── apps/
+│   └── web/                 # SvelteKit frontend + API routes
+├── packages/
+│   └── footballai/            # Python inference package
+├── data/
+│   ├── raw/                   # downloaded/source videos
+│   ├── outputs/               # rendered overlays + CSVs
+│   └── live/                  # rolling JSON live state
+├── models/                    # downloaded .pt weights
+└── external/                  # optional YOLOv5 clone
+```
 
-- Download short YouTube clips with `yt-dlp`
-- Render player-position overlays with public Ultralytics YOLO26 + ByteTrack
-- Render football-specific overlays with the Roboflow YOLOv5 model
-- Run live inference from webcam, file, HLS, RTMP, HTTP, or capture-device inputs
-- Expose generated overlays and live inference state in a SvelteKit dashboard
+## Prerequisites
 
-## Python setup
+- Node.js 20+ and pnpm
+- Python 3.12 (managed by uv)
+- NVIDIA GPU recommended (scripts default to `--device cuda`)
 
-Use Python 3.11+ with a virtual environment:
+## Install
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-Or use `uv`:
-
-```bash
-uv pip install -r requirements.txt
-```
-
-You also need `yt-dlp` and `ffmpeg` available on PATH.
-
-The football-specific YOLOv5 flow expects:
-
-```text
-models/football_yolov5_best.pt
-external/yolov5
-```
-
-These are intentionally ignored by Git because they are large/local artifacts.
-
-The improved Roboflow `sports` YOLOv8 flow expects:
-
-```text
-models/football-player-detection.pt
-models/football-pitch-detection.pt
-models/football-ball-detection.pt
-```
-
-Download them with:
-
-```bash
-python scripts/setup_sports_models.py
-```
-
-## Frontend setup
-
-```bash
+# JavaScript workspace
 pnpm install
-pnpm run dev
+
+# Python workspace
+uv sync
 ```
 
-Open:
-
-```text
-http://localhost:5173
-```
-
-## Download a YouTube clip
+## Download models
 
 ```bash
-python scripts/download_youtube_clip.py \
-  "https://www.youtube.com/watch?v=6pdRXPx5ScQ&list=PL_YXogOtf6IVrnpc5ExgKpnNWRolDfj5P" \
-  --start 00:00:00 \
-  --end 00:00:30 \
+uv run footballai-setup-models
+```
+
+This writes `models/football-player-detection.pt`, `models/football-pitch-detection.pt`, and `models/football-ball-detection.pt`.
+
+## Download a sample clip
+
+```bash
+uv run footballai-download-youtube "https://www.youtube.com/watch?v=..." \
+  --start 00:00:00 --end 00:02:00 \
   --output data/raw/youtube_clip.mp4
 ```
 
-The script now requests H.264 video so OpenCV can read the result without
-needing an AV1 decoder. If you already have an AV1 clip, transcode it with:
+## Render a sports overlay
 
 ```bash
-ffmpeg -i data/raw/youtube_clip.mp4 -c:v libx264 -crf 23 -c:a aac data/raw/youtube_clip_h264.mp4
-```
-
-## Render a YOLO26 positioning overlay
-
-```bash
-python scripts/player_position_overlay.py \
-  --video data/raw/youtube_clip.mp4 \
-  --output data/outputs/player_overlay.mp4 \
-  --csv data/outputs/player_positions.csv
-```
-
-## Render the football-specific YOLOv5 overlay
-
-```bash
-python scripts/football_yolov5_overlay.py \
-  --video data/raw/youtube_clip.mp4 \
-  --weights models/football_yolov5_best.pt \
-  --yolov5-repo external/yolov5 \
-  --output data/outputs/football_yolov5_overlay.mp4 \
-  --csv data/outputs/football_yolov5_positions.csv
-```
-
-The Roboflow tutorial model uses four football classes:
-
-- `ball`
-- `goalkeeper`
-- `player`
-- `referee`
-
-## Render the improved Roboflow `sports` overlay
-
-This uses YOLOv8 models plus ByteTrack, pitch keypoint homography, team
-classification, and a dedicated ball tracker.
-
-```bash
-python scripts/sports_football_overlay.py \
+uv run footballai-overlay-sports \
   --video data/raw/youtube_clip.mp4 \
   --output data/outputs/sports_overlay.mp4 \
   --csv data/outputs/sports_positions.csv \
-  --max-frames 900 \
-  --stride 2
+  --max-frames 90 --stride 3
 ```
 
-Options:
+Run with `--skip-team-fit` to skip SigLIP/UMAP/KMeans team clustering and go faster.
 
-- `--skip-team-fit` – skip SigLIP/UMAP/KMeans team clustering (much faster).
-- `--device cuda` / `mps` / `cpu`.
-- `--team-sample-stride 60` – how often to sample frames for team crops.
-
-Outputs:
-
-- `data/outputs/sports_overlay.mp4` – annotated video with radar/minimap.
-- `data/outputs/sports_positions.csv` – per-frame detections with broadcast
-  coordinates and real-world pitch x/y in centimeters.
-
-## Run live stream inference
-
-The live script accepts any OpenCV/FFmpeg-readable source:
-
-- webcam index: `0`
-- local file: `data/raw/youtube_clip.mp4`
-- HLS: `https://example.com/live/playlist.m3u8`
-- RTMP: `rtmp://example.com/live/key`
-- HTTP video URL
-- capture device path
-
-Local file smoke test with the improved `sports` backend (default):
+## Run live inference
 
 ```bash
-python scripts/live_stream_inference.py \
+uv run footballai-live \
   --source data/raw/youtube_clip.mp4 \
   --backend sports \
   --state data/live/latest.json \
-  --max-frames 300 \
-  --stride 10 \
-  --overlay-output data/outputs/sports_live_overlay.mp4
+  --max-frames 30 --stride 10
 ```
 
-Local file smoke test with the original YOLOv5 backend:
+Then start the dashboard:
 
 ```bash
-python scripts/live_stream_inference.py \
-  --source data/raw/youtube_clip.mp4 \
-  --backend yolov5 \
-  --weights models/football_yolov5_best.pt \
-  --yolov5-repo external/yolov5 \
-  --state data/live/latest.json \
-  --max-frames 300 \
-  --stride 10
+pnpm dev
 ```
 
-Webcam with the `sports` backend:
+The dashboard reads `data/live/latest.json` via `GET /api/live` and lists rendered overlays from `data/outputs` via `GET /api/runs`.
+
+## All CLI entry points
+
+| Command | Purpose |
+|---|---|
+| `uv run footballai-download-youtube` | Download a YouTube clip (H.264 transcode) |
+| `uv run footballai-setup-models` | Download the Roboflow sports YOLOv8 weights |
+| `uv run footballai-overlay-sports` | Full sports overlay video + CSV + radar |
+| `uv run footballai-live` | Rolling JSON live inference |
+| `uv run footballai-overlay-yolov5` | Legacy Roboflow YOLOv5 overlay |
+| `uv run footballai-overlay-players` | Simple player position overlay |
+
+## Useful workspace commands
 
 ```bash
-python scripts/live_stream_inference.py \
-  --source 0 \
-  --backend sports \
-  --state data/live/latest.json
+pnpm dev        # start the SvelteKit app
+pnpm build      # build all workspace packages
+pnpm check      # run TypeScript checks
 ```
 
-HLS/RTMP livestream with the `sports` backend:
+## Data layout
 
-```bash
-python scripts/live_stream_inference.py \
-  --source "https://example.com/live/playlist.m3u8" \
-  --backend sports \
-  --state data/live/latest.json
-```
+- `data/raw/` — source/input videos
+- `data/outputs/` — rendered MP4s and CSVs
+- `data/live/` — rolling JSON snapshot consumed by the dashboard
+- `models/` — YOLOv8 / YOLOv5 weights
+- `external/yolov5/` — optional clone of the YOLOv5 repository
 
-The frontend polls:
-
-```text
-/api/live
-```
-
-and displays:
-
-- current detection counts
-- model latency
-- visual territory signal
-- pressure side and pressure score
-- a first-pass trading-style pressure edge
-
-## Current limitations
-
-The live trading signal is a heuristic over visible broadcast-frame coordinates. It is not yet calibrated odds, team-aware market making, or official match state. The next required steps are:
-
-- team assignment
-- pitch homography
-- scoreboard OCR or official score feed
-- event labeling for shots, corners, fouls, and cards
-- calibrated prediction heads for one target market
+These directories are gitignored and treated as shared runtime artifacts at the repo root.

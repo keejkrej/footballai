@@ -105,7 +105,7 @@
 		<div>
 			<p class="eyebrow">Live Stream</p>
 			<h2>{live.status === 'running' ? 'Inference Running' : 'Waiting For Stream'}</h2>
-			<p>{live.trading?.commentary ?? live.message ?? 'Start the live inference script to populate this panel.'}</p>
+			<p>{live.trading?.commentary ?? live.message ?? 'Start uv run footballai-live to populate this panel.'}</p>
 		</div>
 		<div class="live-metrics">
 			<div>
@@ -197,8 +197,8 @@
 					<section class="panel">
 						<h2>Pipeline</h2>
 						<code>
-							python scripts/football_yolov5_overlay.py --video data/raw/youtube_clip.mp4 --weights
-							models/football_yolov5_best.pt --output data/outputs/football_yolov5_overlay.mp4
+							uv run footballai-overlay-sports --video data/raw/youtube_clip.mp4 --output
+							data/outputs/sports_overlay.mp4
 						</code>
 						{#if selectedRun?.csv}
 							<a href={selectedRun.csv}>Download CSV</a>

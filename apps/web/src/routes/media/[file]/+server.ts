@@ -2,8 +2,9 @@ import { error } from '@sveltejs/kit';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
+import { workspaceRoot } from '$lib/server/paths';
 
-const outputDir = join(process.cwd(), 'data', 'outputs');
+const outputDir = join(workspaceRoot(), 'data', 'outputs');
 const contentTypes: Record<string, string> = {
 	'.mp4': 'video/mp4',
 	'.csv': 'text/csv; charset=utf-8'

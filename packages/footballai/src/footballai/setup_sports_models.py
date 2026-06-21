@@ -12,6 +12,8 @@ from pathlib import Path
 
 import gdown
 
+from footballai._paths import REPO_ROOT
+
 
 MODELS = {
     "football-player-detection.pt": "17PXFNlx-jI7VjVo_vQnB1sONjRyvoB-q",
@@ -22,7 +24,11 @@ MODELS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output-dir", default="models", help="Directory to write model weights")
+    parser.add_argument(
+        "--output-dir",
+        default=str(REPO_ROOT / "models"),
+        help="Directory to write model weights",
+    )
     parser.add_argument("--force", action="store_true", help="Re-download existing files")
     return parser.parse_args()
 

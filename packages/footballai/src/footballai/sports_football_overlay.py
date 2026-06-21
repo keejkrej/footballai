@@ -35,6 +35,8 @@ from sports.common.team import create_batches
 from sports.common.view import ViewTransformer
 from sports.configs.soccer import SoccerPitchConfiguration
 
+from footballai._paths import REPO_ROOT
+
 
 BALL_CLASS_ID = 0
 GOALKEEPER_CLASS_ID = 1
@@ -64,10 +66,26 @@ SIGLIP_MODEL_PATH = "google/siglip-base-patch16-224"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video", default="data/raw/youtube_clip.mp4", help="Input video path")
-    parser.add_argument("--output", default="data/outputs/sports_overlay.mp4", help="Output overlay video")
-    parser.add_argument("--csv", default="data/outputs/sports_positions.csv", help="Output detections CSV")
-    parser.add_argument("--models-dir", default="models", help="Directory containing YOLOv8 .pt weights")
+    parser.add_argument(
+        "--video",
+        default=str(REPO_ROOT / "data/raw/youtube_clip.mp4"),
+        help="Input video path",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(REPO_ROOT / "data/outputs/sports_overlay.mp4"),
+        help="Output overlay video",
+    )
+    parser.add_argument(
+        "--csv",
+        default=str(REPO_ROOT / "data/outputs/sports_positions.csv"),
+        help="Output detections CSV",
+    )
+    parser.add_argument(
+        "--models-dir",
+        default=str(REPO_ROOT / "models"),
+        help="Directory containing YOLOv8 .pt weights",
+    )
     parser.add_argument("--device", default="cuda", help="Torch device: cpu, cuda, mps")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument("--img-size", type=int, default=1280, help="Player/pitch inference size")
@@ -559,5 +577,9 @@ def _nearest_player_to_ball(players: sv.Detections, ball_xy: np.ndarray) -> sv.D
     return players[nearest_idx : nearest_idx + 1]
 
 
-if __name__ == "__main__":
+def main() -> None:
     run_overlay(parse_args())
+
+
+if __name__ == "__main__":
+    main()

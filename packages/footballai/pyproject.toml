@@ -1,0 +1,48 @@
+[project]
+name = "footballai"
+version = "0.1.0"
+description = "FootballAI inference package: player/pitch/ball/team detection and overlays."
+requires-python = ">=3.12"
+dependencies = [
+    "opencv-python",
+    "ultralytics",
+    "numpy",
+    "lap",
+    "gdown",
+    "tqdm",
+    "torch",
+    "torchvision",
+    "transformers",
+    "scikit-learn",
+    "umap-learn",
+    "scipy",
+    "sports @ git+https://github.com/roboflow/sports.git",
+    "yt-dlp",
+]
+
+[project.scripts]
+footballai-download-youtube = "footballai.download_youtube_clip:main"
+footballai-overlay-sports = "footballai.sports_football_overlay:main"
+footballai-live = "footballai.live_stream_inference:main"
+footballai-overlay-yolov5 = "footballai.football_yolov5_overlay:main"
+footballai-overlay-players = "footballai.player_position_overlay:main"
+footballai-setup-models = "footballai.setup_sports_models:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/footballai"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+default-groups = []

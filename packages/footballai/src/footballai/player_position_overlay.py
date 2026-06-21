@@ -16,15 +16,29 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from footballai._paths import REPO_ROOT
+
 
 PERSON_CLASS_ID = 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video", default="data/raw/youtube_clip.mp4", help="Input video path")
-    parser.add_argument("--output", default="data/outputs/player_overlay.mp4", help="Output overlay video")
-    parser.add_argument("--csv", default="data/outputs/player_positions.csv", help="Output detections CSV")
+    parser.add_argument(
+        "--video",
+        default=str(REPO_ROOT / "data/raw/youtube_clip.mp4"),
+        help="Input video path",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(REPO_ROOT / "data/outputs/player_overlay.mp4"),
+        help="Output overlay video",
+    )
+    parser.add_argument(
+        "--csv",
+        default=str(REPO_ROOT / "data/outputs/player_positions.csv"),
+        help="Output detections CSV",
+    )
     parser.add_argument("--model", default="yolo26n.pt", help="Ultralytics model name or path")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument("--max-frames", type=int, default=900, help="Maximum frames to process")

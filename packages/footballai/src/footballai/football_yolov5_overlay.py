@@ -16,6 +16,8 @@ import cv2
 import numpy as np
 import torch
 
+from footballai._paths import REPO_ROOT
+
 
 CLASS_COLORS = {
     "ball": (255, 255, 255),
@@ -29,11 +31,31 @@ POSSESSION_PROXIMITY_PX = 30
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video", default="data/raw/youtube_clip.mp4", help="Input video path")
-    parser.add_argument("--output", default="data/outputs/football_yolov5_overlay.mp4", help="Output overlay video")
-    parser.add_argument("--csv", default="data/outputs/football_yolov5_positions.csv", help="Output detections CSV")
-    parser.add_argument("--weights", default="models/football_yolov5_best.pt", help="YOLOv5 custom weights")
-    parser.add_argument("--yolov5-repo", default="external/yolov5", help="Local YOLOv5 repository path")
+    parser.add_argument(
+        "--video",
+        default=str(REPO_ROOT / "data/raw/youtube_clip.mp4"),
+        help="Input video path",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(REPO_ROOT / "data/outputs/football_yolov5_overlay.mp4"),
+        help="Output overlay video",
+    )
+    parser.add_argument(
+        "--csv",
+        default=str(REPO_ROOT / "data/outputs/football_yolov5_positions.csv"),
+        help="Output detections CSV",
+    )
+    parser.add_argument(
+        "--weights",
+        default=str(REPO_ROOT / "models/football_yolov5_best.pt"),
+        help="YOLOv5 custom weights",
+    )
+    parser.add_argument(
+        "--yolov5-repo",
+        default=str(REPO_ROOT / "external/yolov5"),
+        help="Local YOLOv5 repository path",
+    )
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument("--img-size", type=int, default=1280, help="YOLOv5 inference image size")
     parser.add_argument("--max-frames", type=int, default=900, help="Maximum source frames to process")

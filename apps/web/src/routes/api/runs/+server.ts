@@ -1,8 +1,9 @@
 import { json } from '@sveltejs/kit';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { workspaceRoot } from '$lib/server/paths';
 
-const outputDir = join(process.cwd(), 'data', 'outputs');
+const outputDir = join(workspaceRoot(), 'data', 'outputs');
 
 type RunSummary = {
 	id: string;
