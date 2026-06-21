@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 from footballai._paths import REPO_ROOT
+from footballai.download_youtube_clip import download_youtube_clip
 from footballai.live_server import run_live_server
 from footballai.setup_sports_models import ensure_models
 from footballai.sports_football_overlay import run_full
@@ -27,6 +28,17 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="inference", description="FootballAI sports inference")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    download = subparsers.add_parser("download", help="Download a YouTube clip")
+    download.add_argument("url", help="YouTube URL to download")
+    download.add_argument("--start", default="00:00:00", help="Start timestamp, HH:MM:SS")
+    download.add_argument("--end", default="00:02:00", help="End timestamp, HH:MM:SS")
+    download.add_argument(
+        "--output",
+        default=str(REPO_ROOT / "data" / "raw" / "youtube_clip.mp4"),
+        help="Output mp4 path",
+    )
+    download.add_argument("--height", type=int, default=720, help="Max video height")
 
     full = subparsers.add_parser("full", help="Render a full overlay for a local MP4")
     full.add_argument("--input", required=True, help="Input MP4 path")
@@ -58,7 +70,16 @@ def main() -> None:
 
     ensure_models(args.models_dir)
 
-    if args.command == "full":
+    if args.command == "download":
+        download_youtube_clip(
+            args.url,
+            args.output,
+            start=args.start,
+            end=args.end,
+            height=args.height,
+        )
+        print(f"Downloaded: {args.output}")
+    elif args.command == "full":
         run_full(
             input_path=args.input,
             output_path=args.output,

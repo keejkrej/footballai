@@ -57,7 +57,9 @@ export function runFullInference(
 		'--stride',
 		String(stride),
 		'--max-frames',
-		String(maxFrames)
+		String(maxFrames),
+		'--batch-size',
+		'4'
 	];
 	if (skipTeamFit) args.push('--skip-team-fit');
 
