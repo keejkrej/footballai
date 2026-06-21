@@ -71,33 +71,33 @@ uv run web --port 8000
 
 ### Common options
 
-| Option | Description |
-|---|---|
-| `--models-dir` | Directory containing the Roboflow `.pt` weights (default: `models/`) |
-| `--device` | Torch device: `cuda`, `cpu`, `mps` |
-| `--conf` | Detection confidence threshold (default: 0.25) |
-| `--img-size` | Player/pitch inference size (default: 1280) |
-| `--skip-team-fit` | Skip SigLIP/UMAP/KMeans team clustering (faster) |
+| Option            | Description                                                          |
+| ----------------- | -------------------------------------------------------------------- |
+| `--models-dir`    | Directory containing the Roboflow `.pt` weights (default: `models/`) |
+| `--device`        | Torch device: `cuda`, `cpu`, `mps`                                   |
+| `--conf`          | Detection confidence threshold (default: 0.25)                       |
+| `--img-size`      | Player/pitch inference size (default: 1280)                          |
+| `--skip-team-fit` | Skip SigLIP/UMAP/KMeans team clustering (faster)                     |
 
 ### `inference full` options
 
-| Option | Description |
-|---|---|
-| `--input` | Input MP4 path |
-| `--output` | Output overlay MP4 path |
-| `--csv` | Output detections CSV path |
-| `--max-frames` | Maximum source frames to process (0 = unlimited) |
-| `--stride` | Process every Nth source frame |
-| `--batch-size` | Frames per GPU forward pass |
-| `--team-sample-stride` | Frame stride for collecting team training crops |
-| `--siglip-batch-size` | Batch size for SigLIP feature extraction |
+| Option                 | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `--input`              | Input MP4 path                                   |
+| `--output`             | Output overlay MP4 path                          |
+| `--csv`                | Output detections CSV path                       |
+| `--max-frames`         | Maximum source frames to process (0 = unlimited) |
+| `--stride`             | Process every Nth source frame                   |
+| `--batch-size`         | Frames per GPU forward pass                      |
+| `--team-sample-stride` | Frame stride for collecting team training crops  |
+| `--siglip-batch-size`  | Batch size for SigLIP feature extraction         |
 
 ### `inference live` / `web` options
 
-| Option | Description |
-|---|---|
+| Option   | Description                                |
+| -------- | ------------------------------------------ |
 | `--host` | WebSocket server host (default: `0.0.0.0`) |
-| `--port` | WebSocket server port (default: `8000`) |
+| `--port` | WebSocket server port (default: `8000`)    |
 
 The `web` server accepts raw JPEG frames over the WebSocket and returns an
 annotated JPEG frame plus JSON metadata. It also accepts JSON commands for full
@@ -234,10 +234,12 @@ repo root.
 ## Useful workspace commands
 
 ```bash
-cd apps/web && vp dev          # start the dev server
-cd apps/web && vp build        # build for production
-cd apps/web && vp check        # format, lint, and type checks
-cd apps/web && vp preview      # preview the built SPA
+vp i                           # install dependencies
+vp run                         # run configured tasks (or use `vp dev` / `vp build`)
+vp dev                         # start the dev server from the root
+vp build                       # build the SPA from the root
+vp check                       # format, lint, and type checks from the root
+vp preview                     # preview the built SPA from the root
 ```
 
 ```bash

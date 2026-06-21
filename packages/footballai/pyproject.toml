@@ -4,22 +4,22 @@ version = "0.1.0"
 description = "FootballAI inference package: Roboflow sports player/pitch/ball/team detection."
 requires-python = ">=3.12"
 dependencies = [
-    "opencv-python",
-    "ultralytics",
-    "numpy",
-    "lap",
-    "gdown",
-    "tqdm",
-    "torch",
-    "torchvision",
-    "transformers",
-    "scikit-learn",
-    "umap-learn",
-    "scipy",
-    "sports @ git+https://github.com/roboflow/sports.git",
-    "websockets",
-    "yt-dlp",
-    "playwright",
+  "opencv-python",
+  "ultralytics",
+  "numpy",
+  "lap",
+  "gdown",
+  "tqdm",
+  "torch",
+  "torchvision",
+  "transformers",
+  "scikit-learn",
+  "umap-learn",
+  "scipy",
+  "sports @ git+https://github.com/roboflow/sports.git",
+  "websockets",
+  "yt-dlp",
+  "playwright",
 ]
 
 [project.scripts]
@@ -28,10 +28,7 @@ inference-live-capture = "footballai.headless_capture:main"
 web = "footballai.web_server:main"
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "ruff",
-]
+dev = ["pytest", "ruff"]
 
 [build-system]
 requires = ["hatchling"]

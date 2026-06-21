@@ -43,6 +43,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--video-selector", default="video", help="CSS selector for the video element")
     parser.add_argument("--wait-for-video", type=float, default=5, help="Seconds to wait for the video to start playing")
     parser.add_argument("--wait-for-selector", default="", help="Optional CSS selector to wait for before capturing")
+    parser.add_argument("--click-selector", default="", help="Optional CSS selector to click before capturing (e.g. to start playback)")
+    parser.add_argument("--click-delay", type=float, default=2, help="Seconds to wait after clicking before capturing")
     return parser.parse_args()
 
 
@@ -105,6 +107,15 @@ async def _run_capture(args: argparse.Namespace) -> None:
                     }}
                 }}"""
             )
+
+            # Some sites require a user gesture (e.g. click) before playback starts.
+            if args.click_selector:
+                try:
+                    await page.click(args.click_selector)
+                    await asyncio.sleep(args.click_delay)
+                except Exception as exc:
+                    await browser.close()
+                    raise RuntimeError(f"Failed to click element: {exc}")
 
             start_time = time.time()
             frame_count = 0
