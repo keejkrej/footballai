@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import Hls from 'hls.js';
 
 	type RunSummary = {
 		id: string;
@@ -56,20 +55,17 @@
 	let showProgress = $state(false);
 
 	// Live mode state
-	let streamUrl = $state('');
-	let captureFps = $state(5);
-	let jpegQuality = $state(0.7);
+	let liveSourceType = $state<'file' | 'url' | 'webcam' | 'obs'>('file');
+	let liveSourceValue = $state('');
+	let liveObsMode = $state<'url' | 'device'>('url');
+	let liveMaxFps = $state(5);
 	let liveRunning = $state(false);
 	let liveError = $state('');
 	let liveMeta = $state<LiveMetadata | null>(null);
 	let ws: WebSocket | null = null;
-	let captureTimer: ReturnType<typeof setInterval> | null = null;
-	let videoEl = $state<HTMLVideoElement | null>(null);
-	let captureCanvas = $state<HTMLCanvasElement | null>(null);
 	let outputCanvas = $state<HTMLCanvasElement | null>(null);
 	let outputCtx = $state<CanvasRenderingContext2D | null>(null);
 	let objectUrl: string | null = null;
-	let hls: Hls | null = null;
 	let fullJobPreviewUrl = $state<string | null>(null);
 	let fullJobObjectUrl: string | null = null;
 
@@ -104,6 +100,39 @@
 		ws?.send(JSON.stringify({ action: 'runs' }));
 	}
 
+	function sourcePlaceholder() {
+		switch (liveSourceType) {
+			case 'file':
+				return 'data/raw/clip.mp4';
+			case 'url':
+				return 'https://example.com/stream.m3u8';
+			case 'webcam':
+				return '0';
+			case 'obs':
+				return liveObsMode === 'url' ? 'rtmp://...' : '/dev/video2';
+		}
+	}
+
+	function buildLiveSource() {
+		const base = { max_fps: liveMaxFps };
+		switch (liveSourceType) {
+			case 'file':
+				return { type: 'file', path: liveSourceValue, ...base };
+			case 'url':
+				return { type: 'url', url: liveSourceValue, fps: liveMaxFps };
+			case 'webcam': {
+				const value = liveSourceValue.trim();
+				const deviceId = value === '' ? 0 : parseInt(value, 10);
+				return { type: 'webcam', device: isNaN(deviceId) ? value : deviceId, ...base };
+			}
+			case 'obs': {
+				if (liveObsMode === 'url') {
+					return { type: 'obs', mode: 'url', url: liveSourceValue, fps: liveMaxFps };
+				}
+				return { type: 'obs', mode: 'device', device: liveSourceValue, ...base };
+			}
+		}
+	}
 
 	function handleWsMessage(event: MessageEvent<string | Blob>) {
 		if (typeof event.data === 'string') {
@@ -150,6 +179,7 @@
 					}
 				} else if (payload.type === 'error') {
 					error = (payload.message as string) ?? 'Server error';
+					liveError = error;
 					showProgress = false;
 					runningJob = null;
 				}
@@ -233,109 +263,45 @@
 			stopLive();
 		};
 		ws.onclose = () => {
-			stopLive();
+			liveRunning = false;
 		};
 	}
 
-	function connectLive() {
+	async function startLive() {
 		liveError = '';
 		liveMeta = null;
-		openWsIfNeeded();
-		ws?.send(JSON.stringify({ action: 'configure', options: { device } }));
-		startCapture();
-	}
 
-	async function startLive() {
-		if (!streamUrl.trim()) {
-			liveError = 'Please enter a stream URL or 0/webcam';
+		if (liveSourceType !== 'webcam' && !liveSourceValue.trim()) {
+			liveError = 'Please enter a source value';
 			return;
 		}
-		liveRunning = true;
-		liveError = '';
 
-		const url = streamUrl.trim();
-		const isWebcam = url === '0' || url.toLowerCase() === 'webcam';
-
-		if (isWebcam) {
-			try {
-				const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
-				if (videoEl) videoEl.srcObject = mediaStream;
-			} catch (err) {
-				liveError = `Webcam failed: ${err instanceof Error ? err.message : String(err)}`;
-				stopLive();
-				return;
-			}
-		} else if (Hls.isSupported() && (url.endsWith('.m3u8') || url.includes('m3u8'))) {
-			hls = new Hls();
-			if (videoEl) {
-				hls.loadSource(url);
-				hls.attachMedia(videoEl);
-				hls.on(Hls.Events.MANIFEST_PARSED, () => videoEl?.play());
-				hls.on(Hls.Events.ERROR, (_, data) => {
-					if (data.fatal) {
-						liveError = `HLS error: ${data.type}`;
-						stopLive();
-					}
-				});
-			}
-		} else {
-			if (videoEl) {
-				videoEl.src = url;
-				videoEl.crossOrigin = 'anonymous';
-				videoEl.play().catch((err) => {
-					liveError = `Video playback failed: ${err instanceof Error ? err.message : String(err)}`;
-					stopLive();
-				});
-			}
+		const source = buildLiveSource();
+		if (!source) {
+			liveError = 'Invalid source configuration';
+			return;
 		}
 
-		videoEl?.addEventListener('playing', connectLive, { once: true });
-	}
-
-	function startCapture() {
-		if (!videoEl || !captureCanvas) return;
-		const intervalMs = Math.max(50, 1000 / captureFps);
-		captureTimer = setInterval(() => {
-			if (!videoEl || !captureCanvas || !ws || ws.readyState !== WebSocket.OPEN) return;
-			const ctx = captureCanvas.getContext('2d');
-			if (!ctx) return;
-			captureCanvas.width = videoEl.videoWidth || 640;
-			captureCanvas.height = videoEl.videoHeight || 360;
-			ctx.drawImage(videoEl, 0, 0, captureCanvas.width, captureCanvas.height);
-			captureCanvas.toBlob(
-				(blob) => {
-					if (blob && ws?.readyState === WebSocket.OPEN) {
-						ws.send(blob);
-					}
-				},
-				'image/jpeg',
-				jpegQuality
-			);
-		}, intervalMs);
+		liveRunning = true;
+		try {
+			openWsIfNeeded();
+			ws?.send(JSON.stringify({ action: 'configure', options: { device, skip_team_fit: skipTeamFit } }));
+			ws?.send(JSON.stringify({ action: 'live_start', source, options: { device, skip_team_fit: skipTeamFit } }));
+		} catch (err) {
+			liveRunning = false;
+			liveError = err instanceof Error ? err.message : 'Failed to start live stream';
+		}
 	}
 
 	function stopLive() {
 		liveRunning = false;
-		if (captureTimer) clearInterval(captureTimer);
-		captureTimer = null;
-		if (ws) {
-			try {
-				ws.send(JSON.stringify({ action: 'stop' }));
-			} catch {
-				// ignore
-			}
-			ws.close();
+		try {
+			ws?.send(JSON.stringify({ action: 'live_stop' }));
+		} catch {
+			// ignore
 		}
+		ws?.close();
 		ws = null;
-		if (hls) {
-			hls.destroy();
-			hls = null;
-		}
-		if (videoEl) {
-			videoEl.pause();
-			videoEl.src = '';
-			videoEl.srcObject = null;
-		}
 		if (objectUrl) {
 			URL.revokeObjectURL(objectUrl);
 			objectUrl = null;
@@ -509,23 +475,49 @@
 	{:else}
 		<section class="panel live-form">
 			<p class="eyebrow">Live Stream</p>
-			<h2>Stream a source and get annotated frames back</h2>
+			<h2>Send a source to the backend and get an annotated stream back</h2>
 			<p class="muted">
-				Paste an HLS / DASH / MP4 stream URL, or type <code>0</code> or <code>webcam</code> for your camera.
-				The browser captures frames and sends them to the Python WebSocket server.
+				The backend owns decoding. Paste a local file path, a browser-playable URL, a webcam index, or an OBS
+				output. Annotated frames are pushed back over the WebSocket.
 			</p>
 			<div class="form-grid">
+				<label class="field">
+					<span>Source type</span>
+					<select bind:value={liveSourceType}>
+						<option value="file">Local MP4 file</option>
+						<option value="url">URL (browser-captured)</option>
+						<option value="webcam">Webcam</option>
+						<option value="obs">OBS</option>
+					</select>
+				</label>
 				<label class="field span-2">
-					<span>Stream URL</span>
-					<input type="text" bind:value={streamUrl} placeholder="https://example.com/stream.m3u8" />
+					<span>Source</span>
+					<input type="text" bind:value={liveSourceValue} placeholder={sourcePlaceholder()} />
+				</label>
+				{#if liveSourceType === 'obs'}
+					<label class="field">
+						<span>OBS mode</span>
+						<select bind:value={liveObsMode}>
+							<option value="url">Stream URL</option>
+							<option value="device">Virtual camera device</option>
+						</select>
+					</label>
+				{/if}
+				<label class="field">
+					<span>Max FPS</span>
+					<input type="number" bind:value={liveMaxFps} min="1" max="60" />
 				</label>
 				<label class="field">
-					<span>Capture FPS</span>
-					<input type="number" bind:value={captureFps} min="1" max="30" />
+					<span>Device</span>
+					<select bind:value={device}>
+						<option value="cuda">cuda</option>
+						<option value="cpu">cpu</option>
+						<option value="mps">mps</option>
+					</select>
 				</label>
-				<label class="field">
-					<span>JPEG quality</span>
-					<input type="number" bind:value={jpegQuality} min="0.1" max="1" step="0.1" />
+				<label class="field checkbox">
+					<input type="checkbox" bind:checked={skipTeamFit} />
+					<span>Skip team fit (faster)</span>
 				</label>
 			</div>
 			<div class="actions">
@@ -541,8 +533,6 @@
 		</section>
 
 		<section class="live-stage">
-			<video bind:this={videoEl} class="hidden-video" playsinline muted></video>
-			<canvas bind:this={captureCanvas} class="hidden-canvas"></canvas>
 			<div class="video-frame output-frame">
 				<canvas bind:this={outputCanvas} class="output-canvas"></canvas>
 				{#if !liveMeta}
@@ -787,15 +777,6 @@
 		height: 100%;
 		display: block;
 		object-fit: contain;
-	}
-
-	.hidden-video,
-	.hidden-canvas {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		opacity: 0;
-		pointer-events: none;
 	}
 
 	.output-canvas {

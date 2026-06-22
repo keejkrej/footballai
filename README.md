@@ -6,9 +6,10 @@ video analysis. The Python layer uses the **Roboflow sports** YOLOv8 soccer stac
 
 - **Full**: paste a YouTube link, the Python WebSocket server downloads the clip
   and runs the full inference pipeline, then the SPA plays the annotated MP4.
-- **Live**: paste any stream URL the browser can play (or use your webcam), the
-  browser captures frames, sends them to the Python WebSocket server, and
-  displays the annotated frames + live metrics.
+- **Live**: describe a video source (local MP4, browser URL, webcam, or OBS
+  output) and send it to the Python WebSocket server. The backend decodes the
+  source, runs inference, and pushes annotated JPEG frames + live metrics back
+  to the SPA.
 
 ```
 footballai/
@@ -62,9 +63,6 @@ uv run inference full \
   --output data/outputs/overlay.mp4 \
   --csv data/outputs/positions.csv
 
-# Start the live WebSocket server (frame-in / frame-out)
-uv run inference live --host 0.0.0.0 --port 8000
-
 # Start the unified WebSocket server used by the web UI
 uv run web --port 8000
 ```
@@ -99,13 +97,17 @@ uv run web --port 8000
 | `--host` | WebSocket server host (default: `0.0.0.0`) |
 | `--port` | WebSocket server port (default: `8000`)    |
 
-The `web` server accepts raw JPEG frames over the WebSocket and returns an
-annotated JPEG frame plus JSON metadata. It also accepts JSON commands for full
-jobs:
+The `web` server accepts JSON commands and pushes annotated JPEG frames plus
+JSON metadata back to the client for live jobs:
 
 ```json
 {"action": "configure", "options": {"device": "cuda"}}
 {"action": "full", "youtubeUrl": "...", "start": "00:00:00", "end": "00:02:00"}
+{"action": "live_start", "source": {"type": "file", "path": "data/raw/clip.mp4"}, "options": {"device": "cuda"}}
+{"action": "live_start", "source": {"type": "url", "url": "https://example.com/stream.m3u8"}}
+{"action": "live_start", "source": {"type": "webcam", "device": 0}}
+{"action": "live_start", "source": {"type": "obs", "mode": "url", "url": "rtmp://..."}}
+{"action": "live_stop"}
 {"action": "runs"}
 {"action": "job", "id": "..."}
 {"action": "stop"}
@@ -185,41 +187,30 @@ in `index.html` or in your Vite proxy config.
 ### Live mode
 
 1. Make sure the Python WebSocket server is running.
-2. Paste a stream URL (HLS `.m3u8`, MP4, WebM, etc.) or type `0`/`webcam`.
-3. Click **Start live**.
-4. The browser plays the stream, captures frames, sends them to Python, and
-   renders the returned annotated frames.
+2. Pick a source type and enter the source value:
+   - **Local MP4 file**: an absolute or repo-relative path such as `data/raw/clip.mp4`.
+   - **URL**: any browser-playable stream page or direct media URL. The backend
+     launches a headless Chromium instance and captures the `<video>` frames.
+   - **Webcam**: a device index such as `0` (defaults to `0` if left empty).
+   - **OBS**: either an RTMP/RTSP/SRT/HTTP URL that OBS is streaming to, or a
+     virtual-camera device path such as `/dev/video2`.
+3. Set the max inference FPS and device options.
+4. Click **Start live**. The backend decodes the source, runs inference, and
+   streams annotated JPEG frames back to the browser.
 
-### Stream compatibility note (e.g. ZDF World Cup streams)
+### Stream compatibility note
 
-Live mode can handle **any stream the browser is able to play unencrypted**. If
-you paste an HLS URL, the app uses `hls.js`. If you paste a direct MP4/WebM URL,
-the native `<video>` element handles it. Webcam input uses `getUserMedia`.
-
-Official broadcaster streams such as **ZDF** are typically **geo-restricted**
-and use DRM/encrypted DASH or HLS. Most browsers will refuse to surface
-decrypted frames, and capturing them would likely violate the broadcaster's
-terms of service and applicable copyright law. This app is intended for:
+URL sources are captured through a headless Chromium instance, so they work for
+any page the browser can render and play unencrypted. Geo-restricted or
+DRM-encrypted broadcaster streams (e.g. ZDF World Cup streams) usually cannot be
+surfaced by the browser and capturing them would likely violate the
+broadcaster's terms of service and applicable copyright law. This app is
+intended for:
 
 - Public-domain or Creative Commons footage
 - Streams you own or have explicit rights to process
 - Unencrypted practice/test HLS streams
 - Your own webcam or local video files
-
-## Headless capture
-
-For streams that only work inside a browser, use the Playwright-based headless
-capture CLI:
-
-```bash
-uv run inference-live-capture \
-  --url "https://example.com/stream.m3u8" \
-  --ws ws://localhost:8000 \
-  --fps 5
-```
-
-This launches a headless Chromium instance, captures `<video>` frames, and feeds
-them directly to the Python WebSocket server.
 
 ## Data layout
 
@@ -244,6 +235,5 @@ vp preview                     # preview the built SPA from the root
 
 ```bash
 uv run inference full --help
-uv run inference live --help
 uv run web --help
 ```
