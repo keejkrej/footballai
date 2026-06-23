@@ -286,7 +286,7 @@
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.state ? liveMeta.state.xg.toFixed(2) : '-'}</span>
-				<span class="metric-label">xG</span>
+				<span class="metric-label">goal threat</span>
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.turnover_prob * 100)}%` : '-'}</span>
