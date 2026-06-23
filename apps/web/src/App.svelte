@@ -1,6 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
+	type StateReadouts = {
+		shot_prob: number;
+		xg: number;
+		turnover_prob: number;
+		top_receiver_slot: number;
+		top_receiver_prob: number;
+		pass_end_x: number;
+		pass_end_y: number;
+	};
+
 	type LiveMetadata = {
 		frame: number;
 		latency_ms: number;
@@ -14,6 +24,7 @@
 			pressure_score: number;
 			pitch_territory_delta?: number | null;
 		};
+		state: StateReadouts | null;
 		team_ready: boolean;
 	};
 
@@ -270,24 +281,24 @@
 	<section class="right-pane">
 		<section class="live-metrics">
 			<div>
+				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.shot_prob * 100)}%` : '-'}</span>
+				<span class="metric-label">shot prob</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta?.state ? liveMeta.state.xg.toFixed(2) : '-'}</span>
+				<span class="metric-label">xG</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.turnover_prob * 100)}%` : '-'}</span>
+				<span class="metric-label">turnover prob</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta?.state ? `${liveMeta.state.top_receiver_slot} (${Math.round(liveMeta.state.top_receiver_prob * 100)}%)` : '-'}</span>
+				<span class="metric-label">pass receiver</span>
+			</div>
+			<div>
 				<span class="metric-value">{liveMeta?.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '-'}</span>
-				<span class="metric-label">model latency</span>
-			</div>
-			<div>
-				<span class="metric-value">{liveMeta?.detections ?? '-'}</span>
-				<span class="metric-label">detections</span>
-			</div>
-			<div>
-				<span class="metric-value">{liveMeta?.pressure?.pressure_side ?? '-'}</span>
-				<span class="metric-label">pressure side</span>
-			</div>
-			<div>
-				<span class="metric-value">{liveMeta?.pressure?.pressure_score ?? '-'}</span>
-				<span class="metric-label">pressure score</span>
-			</div>
-			<div>
-				<span class="metric-value">{liveMeta ? (liveMeta.team_ready ? 'ready' : 'warmup') : '-'}</span>
-				<span class="metric-label">teams</span>
+				<span class="metric-label">latency</span>
 			</div>
 		</section>
 

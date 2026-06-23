@@ -60,6 +60,7 @@ from footballai._paths import REPO_ROOT
 from footballai.download_youtube_clip import download_youtube_clip
 from footballai.setup_sports_models import ensure_models
 from footballai.sports_football_overlay import SportsProcessor, run_full
+from footballai.state_model.predictor import FootballStatePredictor
 from footballai.video_sources import VideoSource, create_video_source
 
 # Paths
@@ -205,6 +206,7 @@ def _run_full_job(
     end: str,
     options: dict,
     send_json: Any,
+    state_predictor: FootballStatePredictor | None,
 ) -> None:
     stem = f"{uuid.uuid4().hex[:8]}_{_safe_name(youtube_url)}"
     raw_path = RAW_DIR / f"{stem}.mp4"
@@ -282,6 +284,7 @@ def _run_full_job(
             decoder_queue_size=options.get("decoder_queue_size", 32),
             writer_queue_size=options.get("writer_queue_size", 32),
             on_progress=on_progress,
+            state_predictor=state_predictor,
         )
 
         detections, classes = _summarize_csv(csv_path)
@@ -331,6 +334,7 @@ async def _run_live_loop(
     conf: float,
     img_size: int,
     team_sample_stride: int,
+    state_predictor: FootballStatePredictor | None,
 ) -> None:
     processor = SportsProcessor(
         models_dir=models_dir,
@@ -338,8 +342,11 @@ async def _run_live_loop(
         conf=conf,
         img_size=img_size,
         team_sample_stride=team_sample_stride,
+        state_predictor=state_predictor,
     )
     processor.load_models()
+    if state_predictor is not None:
+        state_predictor.reset()
 
     team_crops: list[np.ndarray] = []
     frame_idx = 0
@@ -401,6 +408,13 @@ async def _run_live_loop(
             classes = Counter(r["class_name"] for r in records)
             pressure = _pressure_from_records(records)
             possession = meta.get("possession")
+            state_probs = meta.get("state")
+            # Send only the human-readable probability readouts, not the full
+            # 128-d state vector, to keep WebSocket messages small.
+            state_summary = (
+                {k: v for k, v in state_probs.items() if k != "state_vector"}
+                if state_probs else None
+            )
 
             await send_binary(jpeg)
             await send_json(
@@ -414,6 +428,7 @@ async def _run_live_loop(
                     "detections": len(records),
                     "possession": possession,
                     "pressure": pressure,
+                    "state": state_summary,
                     "team_ready": processor._team_fit_done,
                 }
             )
@@ -447,6 +462,7 @@ async def _handle_connection(
     device: str,
     conf: float,
     img_size: int,
+    state_predictor: FootballStatePredictor | None,
 ) -> None:
     loop = asyncio.get_running_loop()
 
@@ -549,6 +565,7 @@ async def _handle_connection(
                             team_sample_stride=live_options.get(
                                 "team_sample_stride", team_sample_stride
                             ),
+                            state_predictor=state_predictor,
                         )
                     )
                     await send_json({"type": "status", "status": "live_started"})
@@ -596,6 +613,7 @@ async def _handle_connection(
                             payload.get("end", "00:02:00"),
                             options,
                             send_json_sync,
+                            state_predictor,
                         )
 
                     threading.Thread(target=run_job, daemon=True).start()
@@ -640,6 +658,7 @@ async def _connection_handler(
     device: str,
     conf: float,
     img_size: int,
+    state_predictor: FootballStatePredictor | None,
 ) -> None:
     try:
         await _handle_connection(
@@ -648,6 +667,7 @@ async def _connection_handler(
             device=device,
             conf=conf,
             img_size=img_size,
+            state_predictor=state_predictor,
         )
     except Exception as exc:
         try:
@@ -664,6 +684,7 @@ async def _server_main(
     device: str,
     conf: float,
     img_size: int,
+    state_predictor: FootballStatePredictor | None,
 ) -> None:
     async def handler(websocket: WebSocketServerProtocol) -> None:
         await _connection_handler(
@@ -672,6 +693,7 @@ async def _server_main(
             device=device,
             conf=conf,
             img_size=img_size,
+            state_predictor=state_predictor,
         )
 
     print(f"Starting FootballAI WebSocket server on ws://{host}:{port}")
@@ -687,9 +709,27 @@ def run_web_server(
     device: str = "cuda",
     conf: float = 0.25,
     img_size: int = 1280,
+    state_checkpoint: Path | str | None = REPO_ROOT / "models" / "footballai_state_model.ckpt",
 ) -> None:
     models_dir = Path(models_dir)
     ensure_models(models_dir)
+
+    state_predictor: FootballStatePredictor | None = None
+    if state_checkpoint:
+        checkpoint_path = Path(state_checkpoint)
+        if checkpoint_path.exists():
+            try:
+                state_predictor = FootballStatePredictor(
+                    checkpoint_path,
+                    device=device,
+                    fps=25.0,
+                )
+                print(f"Loaded state model from {checkpoint_path}")
+            except Exception as exc:
+                print(f"Failed to load state model: {exc}; continuing without state readouts")
+        else:
+            print(f"State checkpoint not found at {checkpoint_path}; continuing without state readouts")
+
     asyncio.run(
         _server_main(
             host=host,
@@ -698,6 +738,7 @@ def run_web_server(
             device=device,
             conf=conf,
             img_size=img_size,
+            state_predictor=state_predictor,
         )
     )
 
@@ -710,6 +751,11 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--conf", type=float, default=0.25)
     parser.add_argument("--img-size", type=int, default=1280)
+    parser.add_argument(
+        "--state-checkpoint",
+        default=str(REPO_ROOT / "models" / "footballai_state_model.ckpt"),
+        help="Path to the football state model Lightning checkpoint (.ckpt)",
+    )
     args = parser.parse_args()
     run_web_server(
         host=args.host,
@@ -718,6 +764,7 @@ def main() -> None:
         device=args.device,
         conf=args.conf,
         img_size=args.img_size,
+        state_checkpoint=args.state_checkpoint,
     )
 
 

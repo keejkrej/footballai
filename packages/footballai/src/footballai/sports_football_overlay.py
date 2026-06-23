@@ -52,6 +52,7 @@ from sports.common.view import ViewTransformer
 from sports.configs.soccer import SoccerPitchConfiguration
 
 from footballai._paths import REPO_ROOT
+from footballai.state_model.predictor import FootballStatePredictor
 
 
 BALL_CLASS_ID = 0
@@ -398,6 +399,7 @@ class SportsProcessor:
         img_size: int = 1280,
         team_sample_stride: int = STRIDE,
         siglip_batch_size: int = 64,
+        state_predictor: FootballStatePredictor | None = None,
     ):
         self.models_dir = Path(models_dir)
         self.device = device
@@ -405,6 +407,7 @@ class SportsProcessor:
         self.img_size = img_size
         self.team_sample_stride = team_sample_stride
         self.siglip_batch_size = siglip_batch_size
+        self.state_predictor = state_predictor
 
         self.player_model: YOLO | None = None
         self.pitch_model: YOLO | None = None
@@ -456,6 +459,24 @@ class SportsProcessor:
         except Exception as exc:
             print(f"Team classification failed: {exc}; continuing without team colors")
         self._team_fit_done = True
+
+    def _state_predictions(
+        self,
+        records: list[dict],
+        ball_holder: sv.Detections | None,
+    ) -> dict | None:
+        """Run the state-representation model on the current frame's records."""
+        if self.state_predictor is None:
+            return None
+        try:
+            holder_track_id = None
+            if ball_holder is not None and ball_holder.tracker_id is not None and len(ball_holder):
+                holder_track_id = int(ball_holder.tracker_id[0])
+            return self.state_predictor.predict(records, ball_holder_track_id=holder_track_id)
+        except Exception as exc:
+            # Never let the state model break the video pipeline.
+            print(f"State prediction failed: {exc}")
+            return None
 
     def fit_team_classifier_from_crops(self, crops: list[np.ndarray]) -> None:
         """Fit the classifier lazily from a batch of player crops."""
@@ -542,15 +563,16 @@ class SportsProcessor:
 
         ball_xy = ball_dets.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER) if len(ball_dets) else None
         possession: dict | None = None
+        ball_holder: sv.Detections | None = None
         if ball_xy is not None and len(players):
-            holder = _nearest_player_to_ball(players, ball_xy[0])
-            if holder is not None:
-                hx, hy = holder.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[0]
+            ball_holder = _nearest_player_to_ball(players, ball_xy[0])
+            if ball_holder is not None:
+                hx, hy = ball_holder.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[0]
                 cv2.circle(annotated, (int(hx), int(hy)), 8, (0, 0, 255), 2)
                 if merged.tracker_id is not None:
                     holder_record = next(
                         (r for r in _detections_to_records(merged, keypoints, color_lookup, None, frame_idx, fps, width, height)
-                         if int(r["track_id"]) == int(holder.tracker_id[0])), None
+                         if int(r["track_id"]) == int(ball_holder.tracker_id[0])), None
                     )
                     if holder_record:
                         possession = {"class_name": holder_record["class_name"], "team_id": holder_record["team_id"]}
@@ -580,7 +602,9 @@ class SportsProcessor:
             merged, keypoints, color_lookup, ball_dets, frame_idx, fps, width, height
         )
 
-        return records, annotated, {"counts": counts, "possession": possession}
+        state_probs = self._state_predictions(records, ball_holder)
+
+        return records, annotated, {"counts": counts, "possession": possession, "state": state_probs}
 
     def process_batch(
         self, frames: list[tuple[int, np.ndarray]], fps: float
@@ -632,15 +656,16 @@ class SportsProcessor:
 
             ball_xy = ball_dets.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER) if len(ball_dets) else None
             possession: dict | None = None
+            ball_holder: sv.Detections | None = None
             if ball_xy is not None and len(players):
-                holder = _nearest_player_to_ball(players, ball_xy[0])
-                if holder is not None:
-                    hx, hy = holder.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[0]
+                ball_holder = _nearest_player_to_ball(players, ball_xy[0])
+                if ball_holder is not None:
+                    hx, hy = ball_holder.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[0]
                     cv2.circle(annotated, (int(hx), int(hy)), 8, (0, 0, 255), 2)
                     if merged.tracker_id is not None:
                         holder_record = next(
                             (r for r in _detections_to_records(merged, keypoints, color_lookup, None, idx, fps, width, height)
-                             if int(r["track_id"]) == int(holder.tracker_id[0])), None
+                             if int(r["track_id"]) == int(ball_holder.tracker_id[0])), None
                         )
                         if holder_record:
                             possession = {"class_name": holder_record["class_name"], "team_id": holder_record["team_id"]}
@@ -669,7 +694,8 @@ class SportsProcessor:
             records = _detections_to_records(
                 merged, keypoints, color_lookup, ball_dets, idx, fps, width, height
             )
-            results.append((idx, records, annotated, {"counts": counts, "possession": possession}))
+            state_probs = self._state_predictions(records, ball_holder)
+            results.append((idx, records, annotated, {"counts": counts, "possession": possession, "state": state_probs}))
 
         return results
 
@@ -831,6 +857,7 @@ def run_full(
     decoder_queue_size: int = 32,
     writer_queue_size: int = 32,
     on_progress: Callable[[dict], None] | None = None,
+    state_predictor: FootballStatePredictor | None = None,
 ) -> None:
     """Render the full sports overlay for a local MP4 file and write a CSV."""
     input_path = Path(input_path)
@@ -852,8 +879,11 @@ def run_full(
         img_size=img_size,
         team_sample_stride=team_sample_stride,
         siglip_batch_size=siglip_batch_size,
+        state_predictor=state_predictor,
     )
     processor.load_models()
+    if state_predictor is not None:
+        state_predictor.reset()
 
     # Team classifier with disk cache.
     cache_path = _team_cache_path(input_path, team_cache_dir, img_size, conf, team_sample_stride)
