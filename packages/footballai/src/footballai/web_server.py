@@ -26,6 +26,7 @@ WebSocket protocol:
   { "action": "full", "youtubeUrl": "...", "start": "...", "end": "..." }
   { "action": "live_start", "source": { "type": "file", "path": "..." } }
   { "action": "live_start", "source": { "type": "url", "url": "..." } }
+  { "action": "live_start", "source": { "type": "youtube", "url": "...", "start": "00:00:00", "end": "00:02:00" } }
   { "action": "live_start", "source": { "type": "webcam", "device": 0 } }
   { "action": "live_stop" }
   { "action": "configure", "options": { "device": "cuda" } }

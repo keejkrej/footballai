@@ -55,8 +55,10 @@
 	let showProgress = $state(false);
 
 	// Live mode state
-	let liveSourceType = $state<'file' | 'url' | 'webcam' | 'obs'>('file');
+	let liveSourceType = $state<'file' | 'url' | 'youtube' | 'webcam' | 'obs'>('file');
 	let liveSourceValue = $state('');
+	let liveYoutubeStart = $state('00:00:00');
+	let liveYoutubeEnd = $state('00:02:00');
 	let liveObsMode = $state<'url' | 'device'>('url');
 	let liveMaxFps = $state(5);
 	let liveRunning = $state(false);
@@ -106,6 +108,8 @@
 				return 'data/raw/clip.mp4';
 			case 'url':
 				return 'https://example.com/stream.m3u8';
+			case 'youtube':
+				return 'https://www.youtube.com/watch?v=...';
 			case 'webcam':
 				return '0';
 			case 'obs':
@@ -120,6 +124,14 @@
 				return { type: 'file', path: liveSourceValue, ...base };
 			case 'url':
 				return { type: 'url', url: liveSourceValue, fps: liveMaxFps };
+			case 'youtube':
+				return {
+					type: 'youtube',
+					url: liveSourceValue,
+					start: liveYoutubeStart,
+					end: liveYoutubeEnd,
+					...base,
+				};
 			case 'webcam': {
 				const value = liveSourceValue.trim();
 				const deviceId = value === '' ? 0 : parseInt(value, 10);
@@ -477,8 +489,8 @@
 			<p class="eyebrow">Live Stream</p>
 			<h2>Send a source to the backend and get an annotated stream back</h2>
 			<p class="muted">
-				The backend owns decoding. Paste a local file path, a browser-playable URL, a webcam index, or an OBS
-				output. Annotated frames are pushed back over the WebSocket.
+				The backend owns decoding. Paste a local file path, a browser-playable URL, a YouTube link, a webcam
+				index, or an OBS output. Annotated frames are pushed back over the WebSocket.
 			</p>
 			<div class="form-grid">
 				<label class="field">
@@ -486,6 +498,7 @@
 					<select bind:value={liveSourceType}>
 						<option value="file">Local MP4 file</option>
 						<option value="url">URL (browser-captured)</option>
+						<option value="youtube">YouTube URL</option>
 						<option value="webcam">Webcam</option>
 						<option value="obs">OBS</option>
 					</select>
@@ -494,6 +507,16 @@
 					<span>Source</span>
 					<input type="text" bind:value={liveSourceValue} placeholder={sourcePlaceholder()} />
 				</label>
+				{#if liveSourceType === 'youtube'}
+					<label class="field">
+						<span>Start</span>
+						<input type="text" bind:value={liveYoutubeStart} placeholder="00:00:00" />
+					</label>
+					<label class="field">
+						<span>End</span>
+						<input type="text" bind:value={liveYoutubeEnd} placeholder="00:02:00" />
+					</label>
+				{/if}
 				{#if liveSourceType === 'obs'}
 					<label class="field">
 						<span>OBS mode</span>

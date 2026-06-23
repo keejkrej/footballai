@@ -105,6 +105,7 @@ JSON metadata back to the client for live jobs:
 {"action": "full", "youtubeUrl": "...", "start": "00:00:00", "end": "00:02:00"}
 {"action": "live_start", "source": {"type": "file", "path": "data/raw/clip.mp4"}, "options": {"device": "cuda"}}
 {"action": "live_start", "source": {"type": "url", "url": "https://example.com/stream.m3u8"}}
+{"action": "live_start", "source": {"type": "youtube", "url": "...", "start": "00:00:00", "end": "00:02:00"}}
 {"action": "live_start", "source": {"type": "webcam", "device": 0}}
 {"action": "live_start", "source": {"type": "obs", "mode": "url", "url": "rtmp://..."}}
 {"action": "live_stop"}
@@ -191,6 +192,8 @@ in `index.html` or in your Vite proxy config.
    - **Local MP4 file**: an absolute or repo-relative path such as `data/raw/clip.mp4`.
    - **URL**: any browser-playable stream page or direct media URL. The backend
      launches a headless Chromium instance and captures the `<video>` frames.
+   - **YouTube URL**: a YouTube video URL. The backend uses yt-dlp to resolve the
+     stream and ffmpeg to decode it frame-by-frame while inference runs.
    - **Webcam**: a device index such as `0` (defaults to `0` if left empty).
    - **OBS**: either an RTMP/RTSP/SRT/HTTP URL that OBS is streaming to, or a
      virtual-camera device path such as `/dev/video2`.
