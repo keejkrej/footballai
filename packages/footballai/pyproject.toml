@@ -19,7 +19,6 @@ dependencies = [
   "sports @ git+https://github.com/roboflow/sports.git",
   "websockets",
   "yt-dlp",
-  "playwright",
 ]
 
 [project.scripts]
