@@ -294,7 +294,7 @@
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.state ? `${liveMeta.state.top_receiver_slot} (${Math.round(liveMeta.state.top_receiver_prob * 100)}%)` : '-'}</span>
-				<span class="metric-label">likely receiver</span>
+				<span class="metric-label">receiver (pass prob)</span>
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '-'}</span>
