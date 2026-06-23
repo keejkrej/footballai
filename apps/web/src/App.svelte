@@ -40,6 +40,15 @@
 	let liveRunning = $state(false);
 	let liveError = $state('');
 	let liveMeta = $state<LiveMetadata | null>(null);
+	let theme = $state<'light' | 'dark'>(
+		typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
+			? 'dark'
+			: 'light'
+	);
+
+	$effect(() => {
+		document.documentElement.setAttribute('data-theme', theme);
+	});
 	let ws: WebSocket | null = null;
 	let wsReadyPromise: Promise<WebSocket> | null = null;
 	let outputCanvas = $state<HTMLCanvasElement | null>(null);
@@ -200,7 +209,14 @@
 		}
 	}
 
+	function getInitialTheme(): 'light' | 'dark' {
+		if (typeof window === 'undefined') return 'light';
+		if (window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+		return 'light';
+	}
+
 	onMount(() => {
+		theme = getInitialTheme();
 		ensureOutputCtx();
 		return () => stopLive();
 	});
@@ -210,10 +226,20 @@
 	<aside class="left-pane">
 		<header class="topbar">
 			<h1>FootballAI</h1>
+			<div class="topbar-tools">
+				<button
+					type="button"
+					class="theme-toggle"
+					aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+					onclick={() => (theme = theme === 'light' ? 'dark' : 'light')}
+				>
+					<span class="theme-icon" aria-hidden="true">{theme === 'light' ? '☀️' : '🌙'}</span>
+					<span class="theme-label">{theme === 'light' ? 'Light' : 'Dark'}</span>
+				</button>
+			</div>
 		</header>
 
 		<section class="panel live-form">
-			<p class="eyebrow">Live Stream</p>
 			<h2>Send a source to the backend and get an annotated stream back</h2>
 			<p class="muted">
 				The backend owns decoding. Paste a local file path, a YouTube link, or an OBS device path.
@@ -281,23 +307,23 @@
 	<section class="right-pane">
 		<section class="live-metrics">
 			<div>
-				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.shot_prob * 100)}%` : '-'}</span>
+				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.shot_prob * 100)}%` : '—'}</span>
 				<span class="metric-label">shot chance</span>
 			</div>
 			<div>
-				<span class="metric-value">{liveMeta?.state ? liveMeta.state.xg.toFixed(2) : '-'}</span>
+				<span class="metric-value">{liveMeta?.state ? liveMeta.state.xg.toFixed(2) : '—'}</span>
 				<span class="metric-label">goal threat</span>
 			</div>
 			<div>
-				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.turnover_prob * 100)}%` : '-'}</span>
+				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.turnover_prob * 100)}%` : '—'}</span>
 				<span class="metric-label">turnover risk</span>
 			</div>
 			<div>
-				<span class="metric-value">{liveMeta?.state ? `${liveMeta.state.top_receiver_slot} (${Math.round(liveMeta.state.top_receiver_prob * 100)}%)` : '-'}</span>
+				<span class="metric-value">{liveMeta?.state ? `${liveMeta.state.top_receiver_slot} (${Math.round(liveMeta.state.top_receiver_prob * 100)}%)` : '—'}</span>
 				<span class="metric-label">receiver (pass prob)</span>
 			</div>
 			<div>
-				<span class="metric-value">{liveMeta?.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '-'}</span>
+				<span class="metric-value">{liveMeta?.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '—'}</span>
 				<span class="metric-label">latency</span>
 			</div>
 		</section>
@@ -306,7 +332,9 @@
 			<div class="video-frame output-frame">
 				<canvas bind:this={outputCanvas} class="output-canvas"></canvas>
 				{#if !liveMeta}
-					<div class="placeholder">Annotated stream will appear here</div>
+					<div class="placeholder">
+						<span>Annotated stream will appear here</span>
+					</div>
 				{/if}
 			</div>
 		</section>
@@ -316,26 +344,27 @@
 <style>
 	:global(body) {
 		margin: 0;
-		background: #0f1214;
-		color: #f3f5f4;
-		font-family:
-			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--font-ui);
+		font-size: 13px;
+		line-height: 1.5;
 	}
 
 	.shell {
 		display: grid;
-		grid-template-columns: 320px minmax(0, 1fr);
-		gap: 24px;
+		grid-template-columns: 340px minmax(0, 1fr);
+		gap: var(--space-5);
 		height: 100vh;
 		overflow: hidden;
-		padding: 24px;
+		padding: var(--space-5);
 		box-sizing: border-box;
 	}
 
 	.left-pane {
 		display: flex;
 		flex-direction: column;
-		gap: 18px;
+		gap: var(--space-5);
 		overflow-y: auto;
 		min-width: 0;
 	}
@@ -343,7 +372,7 @@
 	.right-pane {
 		display: flex;
 		flex-direction: column;
-		gap: 18px;
+		gap: var(--space-4);
 		min-width: 0;
 		overflow: hidden;
 	}
@@ -352,15 +381,54 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 20px;
+		gap: var(--space-4);
+		min-height: 36px;
 	}
 
-	.eyebrow {
-		margin: 0 0 4px;
-		color: #8fb8a0;
-		font-size: 13px;
+	.topbar h1 {
+		font-family: var(--font-brand);
+		font-size: 26px;
 		font-weight: 700;
-		text-transform: uppercase;
+		letter-spacing: -0.03em;
+		color: var(--ink);
+		line-height: 1;
+	}
+
+	.topbar-tools {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
+	.theme-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		padding: 5px 10px;
+		border: 1px solid var(--line);
+		background: var(--surface);
+		color: var(--ink);
+		border-radius: 999px;
+		font: inherit;
+		font-size: 12px;
+		font-weight: 500;
+		line-height: 1;
+		cursor: pointer;
+		transition: border-color 0.15s ease, background 0.15s ease;
+	}
+
+	.theme-toggle:hover {
+		border-color: var(--signal);
+	}
+
+	.theme-icon {
+		font-size: 13px;
+		line-height: 1;
+	}
+
+	.theme-label {
+		font-size: 11px;
+		line-height: 1;
 	}
 
 	h1,
@@ -369,80 +437,92 @@
 		margin: 0;
 	}
 
-	h1 {
-		font-size: 32px;
-		line-height: 1.1;
-	}
-
 	h2 {
-		margin-bottom: 14px;
-		font-size: 16px;
+		font-family: var(--font-ui);
+		font-size: 15px;
+		font-weight: 500;
+		line-height: 1.35;
+		margin-bottom: var(--space-3);
 	}
 
 	button {
-		border: 1px solid #3b4541;
-		background: #1c2421;
-		color: #f3f5f4;
-		border-radius: 6px;
-		padding: 10px 12px;
+		border: 1px solid var(--line-strong);
+		background: var(--surface);
+		color: var(--ink);
+		border-radius: var(--radius-sm);
+		padding: 10px 14px;
 		font: inherit;
+		font-weight: 500;
 		cursor: pointer;
+		transition: border-color 0.15s ease, background 0.15s ease;
 	}
 
 	button:hover {
-		border-color: #77c996;
+		border-color: var(--signal);
 	}
 
 	button.primary {
-		background: #2a3b33;
-		border-color: #77c996;
-		color: #f3f5f4;
+		background: var(--signal);
+		border-color: var(--signal);
+		color: #fff;
 		font-weight: 600;
 	}
 
+	button.primary:hover {
+		background: var(--signal-hover);
+		border-color: var(--signal-hover);
+	}
+
 	button.secondary {
-		background: #161b1a;
+		background: var(--surface);
 	}
 
 	.panel {
-		border: 1px solid #26302c;
-		background: #161b1a;
-		border-radius: 8px;
-		padding: 16px;
+		border: 1px solid var(--line);
+		background: var(--surface);
+		border-radius: var(--radius);
+		padding: var(--space-4);
 	}
 
 	.live-form .form-grid {
 		display: grid;
 		grid-template-columns: 1fr;
-		gap: 12px;
-		margin: 14px 0;
+		gap: var(--space-3);
+		margin: var(--space-3) 0;
 	}
 
 	.field {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: var(--space-1);
 		font-size: 13px;
 	}
 
 	.field span {
-		color: #aab4af;
+		color: var(--graphite);
+		font-weight: 500;
 	}
 
 	.field input,
 	.field select {
-		background: #0d1110;
-		border: 1px solid #3b4541;
-		border-radius: 6px;
-		padding: 8px 10px;
-		color: #f3f5f4;
+		background: var(--paper);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-sm);
+		padding: 9px 10px;
+		color: var(--ink);
 		font: inherit;
+		transition: border-color 0.15s ease;
+	}
+
+	.field input:focus,
+	.field select:focus {
+		border-color: var(--signal);
 	}
 
 	.field select {
-		padding: 8px 28px 8px 10px;
+		padding: 9px 28px 9px 10px;
 		appearance: none;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aab4af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 		background-repeat: no-repeat;
 		background-position: right 10px center;
 	}
@@ -452,30 +532,30 @@
 	}
 
 	.muted {
-		color: #aab4af;
-		line-height: 1.4;
-		margin: 8px 0 12px;
+		color: var(--graphite);
+		line-height: 1.5;
+		margin: 0 0 var(--space-3);
 	}
 
 	.actions {
 		display: flex;
-		gap: 10px;
-		margin-top: 12px;
+		gap: var(--space-2);
+		margin-top: var(--space-3);
 	}
 
 	.live-stage {
 		display: flex;
 		flex-direction: column;
-		gap: 14px;
+		gap: var(--space-4);
 		min-width: 0;
 		flex: 1 1 auto;
 		min-height: 0;
 	}
 
 	.video-frame {
-		background: #050706;
-		border: 1px solid #26302c;
-		border-radius: 8px;
+		background: var(--stage-bg);
+		border: 1px solid var(--line);
+		border-radius: var(--radius);
 		overflow: hidden;
 		flex: 1 1 auto;
 		position: relative;
@@ -498,44 +578,63 @@
 		inset: 0;
 		display: grid;
 		place-items: center;
-		color: #aab4af;
-	}
-
-	.live-metrics > div {
-		border: 1px solid #26302c;
-		background: #161b1a;
-		border-radius: 8px;
-		display: grid;
-		gap: 4px;
-		padding: 14px;
-	}
-
-	.metric-value {
-		font-size: 24px;
-		font-weight: 800;
-	}
-
-	.metric-label {
-		color: #aab4af;
+		color: var(--graphite);
 		font-size: 13px;
+		padding: var(--space-4);
+		text-align: center;
+	}
+
+	.placeholder span {
+		background: var(--stage-paper);
+		border: 1px dashed var(--line-strong);
+		border-radius: var(--radius);
+		padding: var(--space-4) var(--space-5);
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 	}
 
 	.live-metrics {
 		display: grid;
 		grid-template-columns: repeat(5, minmax(0, 1fr));
-		gap: 10px;
+		gap: var(--space-3);
+	}
+
+	.live-metrics > div {
+		border: 1px solid var(--line);
+		background: var(--surface);
+		border-radius: var(--radius);
+		display: grid;
+		gap: var(--space-1);
+		padding: var(--space-4);
+	}
+
+	.metric-value {
+		font-family: var(--font-brand);
+		font-size: 24px;
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		font-variant-numeric: tabular-nums;
+		line-height: 1.2;
+	}
+
+	.metric-label {
+		color: var(--graphite);
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
 	}
 
 	.error {
-		color: #ffc2b8;
+		color: var(--error);
+		margin-top: var(--space-3);
 	}
 
-	@media (max-width: 900px) {
+	@media (max-width: 980px) {
 		.shell {
 			grid-template-columns: 1fr;
 			height: auto;
 			overflow: visible;
-			padding: 16px;
+			padding: var(--space-4);
 		}
 
 		.left-pane,
@@ -543,6 +642,17 @@
 			overflow: visible;
 		}
 
+		.live-metrics {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.video-frame {
+			aspect-ratio: 16 / 9;
+			min-height: 280px;
+		}
+	}
+
+	@media (max-width: 560px) {
 		.live-metrics {
 			grid-template-columns: 1fr;
 		}
