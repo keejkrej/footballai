@@ -379,20 +379,17 @@
 		font-size: 16px;
 	}
 
-	button,
-	a {
+	button {
 		border: 1px solid #3b4541;
 		background: #1c2421;
 		color: #f3f5f4;
 		border-radius: 6px;
 		padding: 10px 12px;
 		font: inherit;
-		text-decoration: none;
 		cursor: pointer;
 	}
 
-	button:hover,
-	a:hover {
+	button:hover {
 		border-color: #77c996;
 	}
 
@@ -454,12 +451,6 @@
 		grid-column: auto;
 	}
 
-	.field.checkbox {
-		flex-direction: row;
-		align-items: center;
-		gap: 8px;
-	}
-
 	.muted {
 		color: #aab4af;
 		line-height: 1.4;
@@ -510,14 +501,10 @@
 		color: #aab4af;
 	}
 
-	.live-metrics > div,
-	.empty {
+	.live-metrics > div {
 		border: 1px solid #26302c;
 		background: #161b1a;
 		border-radius: 8px;
-	}
-
-	.live-metrics > div {
 		display: grid;
 		gap: 4px;
 		padding: 14px;
@@ -537,11 +524,6 @@
 		display: grid;
 		grid-template-columns: repeat(5, minmax(0, 1fr));
 		gap: 10px;
-	}
-
-	.empty {
-		padding: 24px;
-		color: #c4ccc8;
 	}
 
 	.error {
