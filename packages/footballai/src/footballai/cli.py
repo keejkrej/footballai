@@ -24,11 +24,6 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--img-size", type=int, default=1280, help="Player/pitch inference size"
     )
-    parser.add_argument(
-        "--skip-team-fit",
-        action="store_true",
-        help="Skip team classifier training (faster, no team colors)",
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -136,7 +131,6 @@ def main() -> None:
             max_frames=args.max_frames,
             stride=args.stride,
             batch_size=args.batch_size,
-            skip_team_fit=args.skip_team_fit,
             team_sample_stride=args.team_sample_stride,
             siglip_batch_size=getattr(args, "siglip_batch_size", 64),
             team_cache=args.team_cache,

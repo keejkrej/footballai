@@ -1,26 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
-	type RunSummary = {
-		id: string;
-		label: string;
-		video: string;
-		csv: string | null;
-		sizeBytes: number;
-		durationLabel: string;
-		detections: number;
-		classes: Record<string, number>;
-	};
-
-	type Job = {
-		id: string;
-		status: 'pending' | 'downloading' | 'inferencing' | 'done' | 'error';
-		progress: number;
-		message: string;
-		videoUrl?: string;
-		csvUrl?: string | null;
-	};
-
 	type LiveMetadata = {
 		frame: number;
 		latency_ms: number;
@@ -37,41 +17,23 @@
 		team_ready: boolean;
 	};
 
-	let mode = $state<'full' | 'live'>('full');
-	let runs = $state<RunSummary[]>([]);
-	let selectedId = $state('');
-	let loading = $state(true);
-	let error = $state('');
-
-	// Full mode form
-	let youtubeUrl = $state('');
-	let startTime = $state('00:00:00');
-	let endTime = $state('00:02:00');
 	let device = $state('cuda');
-	let maxFrames = $state(0);
-	let stride = $state(1);
-	let skipTeamFit = $state(false);
-	let runningJob = $state<Job | null>(null);
-	let showProgress = $state(false);
 
-	// Live mode state
-	let liveSourceType = $state<'file' | 'url' | 'webcam' | 'obs'>('file');
+	let liveSourceType = $state<'file' | 'youtube' | 'obs'>('file');
 	let liveSourceValue = $state('');
-	let liveObsMode = $state<'url' | 'device'>('url');
+	let liveFileStart = $state('00:00:00');
+	let liveFileEnd = $state('00:02:00');
+	let liveYoutubeStart = $state('00:00:00');
+	let liveYoutubeEnd = $state('00:02:00');
 	let liveMaxFps = $state(5);
 	let liveRunning = $state(false);
 	let liveError = $state('');
 	let liveMeta = $state<LiveMetadata | null>(null);
 	let ws: WebSocket | null = null;
+	let wsReadyPromise: Promise<WebSocket> | null = null;
 	let outputCanvas = $state<HTMLCanvasElement | null>(null);
 	let outputCtx = $state<CanvasRenderingContext2D | null>(null);
 	let objectUrl: string | null = null;
-	let fullJobPreviewUrl = $state<string | null>(null);
-	let fullJobObjectUrl: string | null = null;
-
-	const selectedRun = $derived(runs.find((run) => run.id === selectedId) ?? runs[0]);
-	const totalDetections = $derived(selectedRun?.detections ?? 0);
-	const classEntries = $derived(Object.entries(selectedRun?.classes ?? {}).sort((a, b) => b[1] - a[1]));
 
 	const wsUrl = () => {
 		const cfg = (window as any).__FOOTBALLAI_WS__ as string | undefined;
@@ -81,11 +43,6 @@
 		return `${protocol}//${loc.host}/ws`;
 	};
 
-	function formatBytes(bytes: number) {
-		if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	}
-
 	function ensureOutputCtx() {
 		if (!outputCtx && outputCanvas) {
 			outputCtx = outputCanvas.getContext('2d');
@@ -93,23 +50,14 @@
 		return outputCtx;
 	}
 
-	function requestRuns() {
-		loading = true;
-		error = '';
-		openWsIfNeeded();
-		ws?.send(JSON.stringify({ action: 'runs' }));
-	}
-
 	function sourcePlaceholder() {
 		switch (liveSourceType) {
 			case 'file':
 				return 'data/raw/clip.mp4';
-			case 'url':
-				return 'https://example.com/stream.m3u8';
-			case 'webcam':
-				return '0';
+			case 'youtube':
+				return 'https://www.youtube.com/watch?v=...';
 			case 'obs':
-				return liveObsMode === 'url' ? 'rtmp://...' : '/dev/video2';
+				return '/dev/video2';
 		}
 	}
 
@@ -117,18 +65,22 @@
 		const base = { max_fps: liveMaxFps };
 		switch (liveSourceType) {
 			case 'file':
-				return { type: 'file', path: liveSourceValue, ...base };
-			case 'url':
-				return { type: 'url', url: liveSourceValue, fps: liveMaxFps };
-			case 'webcam': {
-				const value = liveSourceValue.trim();
-				const deviceId = value === '' ? 0 : parseInt(value, 10);
-				return { type: 'webcam', device: isNaN(deviceId) ? value : deviceId, ...base };
-			}
+				return {
+					type: 'file',
+					path: liveSourceValue,
+					start: liveFileStart,
+					end: liveFileEnd,
+					...base,
+				};
+			case 'youtube':
+				return {
+					type: 'youtube',
+					url: liveSourceValue,
+					start: liveYoutubeStart,
+					end: liveYoutubeEnd,
+					...base,
+				};
 			case 'obs': {
-				if (liveObsMode === 'url') {
-					return { type: 'obs', mode: 'url', url: liveSourceValue, fps: liveMaxFps };
-				}
 				return { type: 'obs', mode: 'device', device: liveSourceValue, ...base };
 			}
 		}
@@ -138,50 +90,10 @@
 		if (typeof event.data === 'string') {
 			try {
 				const payload = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
-				if (payload.type === 'runs') {
-					const data = payload as unknown as { runs: RunSummary[] };
-					runs = data.runs;
-					selectedId = data.runs[0]?.id ?? '';
-					loading = false;
-					return;
-				}
 				if (payload.type === 'metadata') {
 					liveMeta = payload as unknown as LiveMetadata;
-				} else if (payload.type === 'job_progress') {
-					runningJob = {
-						...(runningJob ?? { id: payload.job_id as string }),
-						status: payload.status as Job['status'],
-						progress: (payload.progress as number) ?? 0,
-						message: (payload.message as string) ?? '',
-						videoUrl: payload.video_url as string | undefined,
-						csvUrl: payload.csv_url as string | null | undefined,
-					};
-					if (payload.preview_frame as string | undefined) {
-						const base64 = payload.preview_frame as string;
-						if (fullJobObjectUrl) URL.revokeObjectURL(fullJobObjectUrl);
-						fullJobObjectUrl = URL.createObjectURL(
-							new Blob([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], { type: 'image/jpeg' })
-						);
-						fullJobPreviewUrl = fullJobObjectUrl;
-					}
-					const jobStatus = runningJob.status;
-					if (jobStatus === 'done' || jobStatus === 'error') {
-						setTimeout(async () => {
-							showProgress = false;
-							runningJob = null;
-							fullJobPreviewUrl = null;
-							if (fullJobObjectUrl) {
-								URL.revokeObjectURL(fullJobObjectUrl);
-								fullJobObjectUrl = null;
-							}
-							if (jobStatus === 'done') requestRuns();
-						}, 2000);
-					}
 				} else if (payload.type === 'error') {
-					error = (payload.message as string) ?? 'Server error';
-					liveError = error;
-					showProgress = false;
-					runningJob = null;
+					liveError = (payload.message as string) ?? 'Server error';
 				}
 			} catch {
 				// ignore non-JSON text
@@ -203,75 +115,43 @@
 		}
 	}
 
-	async function startFullPipeline() {
-		if (!youtubeUrl.trim()) {
-			error = 'Please enter a YouTube URL';
-			return;
-		}
-		error = '';
-		showProgress = true;
-		try {
-			openWsIfNeeded();
-			ws?.send(
-				JSON.stringify({
-					action: 'full',
-					youtubeUrl,
-					start: startTime,
-					end: endTime,
-					device,
-					max_frames: maxFrames,
-					stride,
-					skip_team_fit: skipTeamFit,
-				})
-			);
-			runningJob = {
-				id: '',
-				status: 'pending',
-				progress: 0,
-				message: 'Queued',
+	function openWsIfNeeded(): Promise<WebSocket> {
+		if (ws?.readyState === WebSocket.OPEN) return Promise.resolve(ws);
+		if (wsReadyPromise) return wsReadyPromise;
+
+		wsReadyPromise = new Promise<WebSocket>((resolve, reject) => {
+			if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+				try {
+					ws.close();
+				} catch {
+					// ignore
+				}
+			}
+
+			const socket = new WebSocket(wsUrl());
+			ws = socket;
+			socket.binaryType = 'blob';
+			socket.onmessage = handleWsMessage;
+			socket.onopen = () => resolve(socket);
+			socket.onerror = () => reject(new Error('WebSocket error. Is the Python server running?'));
+			socket.onclose = () => {
+				if (ws === socket) {
+					ws = null;
+					liveRunning = false;
+				}
 			};
-		} catch (err) {
-			showProgress = false;
-			runningJob = null;
-			error = err instanceof Error ? err.message : 'Failed to start pipeline';
-		}
-	}
+		}).finally(() => {
+			wsReadyPromise = null;
+		});
 
-	function stopFullPipeline() {
-		showProgress = false;
-		runningJob = null;
-		fullJobPreviewUrl = null;
-		if (fullJobObjectUrl) {
-			URL.revokeObjectURL(fullJobObjectUrl);
-			fullJobObjectUrl = null;
-		}
-		try {
-			ws?.send(JSON.stringify({ action: 'cancel' }));
-		} catch {
-			// ignore
-		}
-	}
-
-	function openWsIfNeeded() {
-		if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-		ws = new WebSocket(wsUrl());
-		ws.binaryType = 'blob';
-		ws.onmessage = handleWsMessage;
-		ws.onerror = () => {
-			error = 'WebSocket error. Is the Python server running?';
-			liveError = error;
-			stopLive();
-		};
-		ws.onclose = () => {
-			liveRunning = false;
-		};
+		return wsReadyPromise;
 	}
 
 	async function startLive() {
 		liveError = '';
 		liveMeta = null;
 
-		if (liveSourceType !== 'webcam' && !liveSourceValue.trim()) {
+		if (!liveSourceValue.trim()) {
 			liveError = 'Please enter a source value';
 			return;
 		}
@@ -284,9 +164,9 @@
 
 		liveRunning = true;
 		try {
-			openWsIfNeeded();
-			ws?.send(JSON.stringify({ action: 'configure', options: { device, skip_team_fit: skipTeamFit } }));
-			ws?.send(JSON.stringify({ action: 'live_start', source, options: { device, skip_team_fit: skipTeamFit } }));
+			const socket = await openWsIfNeeded();
+			socket.send(JSON.stringify({ action: 'configure', options: { device } }));
+			socket.send(JSON.stringify({ action: 'live_start', source, options: { device } }));
 		} catch (err) {
 			liveRunning = false;
 			liveError = err instanceof Error ? err.message : 'Failed to start live stream';
@@ -302,6 +182,7 @@
 		}
 		ws?.close();
 		ws = null;
+		wsReadyPromise = null;
 		if (objectUrl) {
 			URL.revokeObjectURL(objectUrl);
 			objectUrl = null;
@@ -309,184 +190,30 @@
 	}
 
 	onMount(() => {
-		requestRuns();
 		ensureOutputCtx();
-		return () => {
-			stopFullPipeline();
-			stopLive();
-		};
+		return () => stopLive();
 	});
 </script>
 
 <main class="shell">
-	<header class="topbar">
-		<div>
-			<p class="eyebrow">FootballAI</p>
-			<h1>Overlay Lab</h1>
-		</div>
-		<div class="tabs">
-			<button type="button" class:active={mode === 'full'} onclick={() => (mode = 'full')}>Full</button>
-			<button type="button" class:active={mode === 'live'} onclick={() => (mode = 'live')}>Live</button>
-		</div>
-	</header>
+	<aside class="left-pane">
+		<header class="topbar">
+			<h1>FootballAI</h1>
+		</header>
 
-	{#if mode === 'full'}
-		<section class="panel full-form">
-			<p class="eyebrow">Full Match</p>
-			<h2>Analyze a YouTube clip</h2>
-			<div class="form-grid">
-				<label class="field span-2">
-					<span>YouTube URL</span>
-					<input type="text" bind:value={youtubeUrl} placeholder="https://www.youtube.com/watch?v=..." />
-				</label>
-				<label class="field">
-					<span>Start</span>
-					<input type="text" bind:value={startTime} placeholder="00:00:00" />
-				</label>
-				<label class="field">
-					<span>End</span>
-					<input type="text" bind:value={endTime} placeholder="00:02:00" />
-				</label>
-				<label class="field">
-					<span>Device</span>
-					<select bind:value={device}>
-						<option value="cuda">cuda</option>
-						<option value="cpu">cpu</option>
-						<option value="mps">mps</option>
-					</select>
-				</label>
-				<label class="field">
-					<span>Max frames</span>
-					<input type="number" bind:value={maxFrames} min="0" />
-				</label>
-				<label class="field">
-					<span>Stride</span>
-					<input type="number" bind:value={stride} min="1" />
-				</label>
-				<label class="field checkbox">
-					<input type="checkbox" bind:checked={skipTeamFit} />
-					<span>Skip team fit (faster)</span>
-				</label>
-			</div>
-			<button type="button" class="primary" onclick={startFullPipeline}>Run pipeline</button>
-		</section>
-
-		{#if showProgress && runningJob}
-			<div class="modal-backdrop">
-				<div class="modal">
-					<h3>Running pipeline</h3>
-					<p class="status">{runningJob.message}</p>
-					<div class="progress-track">
-						<div class="progress-fill" style={`width: ${runningJob.progress}%`}></div>
-					</div>
-					<p class="muted">{runningJob.progress}% — {runningJob.status}</p>
-					{#if fullJobPreviewUrl}
-						<div class="preview-frame">
-							<img src={fullJobPreviewUrl} alt="latest preview" />
-						</div>
-					{/if}
-					<button type="button" class="secondary" onclick={stopFullPipeline}>Close</button>
-				</div>
-			</div>
-		{/if}
-
-		{#if error}
-			<section class="empty error">{error}</section>
-		{/if}
-
-		{#if loading}
-			<section class="empty">Loading generated overlays...</section>
-		{:else if runs.length === 0}
-			<section class="empty">No overlay videos found. Run the Full pipeline above to create one.</section>
-		{:else}
-			<section class="workspace">
-				<aside class="runlist" aria-label="Generated overlay runs">
-					{#each runs as run}
-						<button
-							type="button"
-							class:active={run.id === selectedRun?.id}
-							onclick={() => (selectedId = run.id)}
-						>
-							<span>{run.label}</span>
-							<small>{run.detections.toLocaleString()} detections · {formatBytes(run.sizeBytes)}</small>
-						</button>
-					{/each}
-				</aside>
-
-				<section class="review">
-					<div class="video-frame">
-						{#if selectedRun}
-							<video src={selectedRun.video} controls playsinline aria-label={selectedRun.label}>
-								<track kind="captions" />
-							</video>
-						{/if}
-					</div>
-
-					<div class="metrics">
-						<div>
-							<span class="metric-value">{totalDetections.toLocaleString()}</span>
-							<span class="metric-label">detections</span>
-						</div>
-						<div>
-							<span class="metric-value">{classEntries.length}</span>
-							<span class="metric-label">classes</span>
-						</div>
-						<div>
-							<span class="metric-value">{selectedRun ? formatBytes(selectedRun.sizeBytes) : '-'}</span>
-							<span class="metric-label">video size</span>
-						</div>
-					</div>
-
-					<div class="detail-grid">
-						<section class="panel">
-							<h2>Class Breakdown</h2>
-							{#if classEntries.length === 0}
-								<p>No class metadata available for this run.</p>
-							{:else}
-								<div class="bars">
-									{#each classEntries as [className, count]}
-										<div class="bar-row">
-											<div class="bar-label">
-												<span>{className}</span>
-												<strong>{count.toLocaleString()}</strong>
-											</div>
-											<div class="bar-track">
-												<div style={`width: ${(count / Math.max(1, totalDetections)) * 100}%`}></div>
-											</div>
-										</div>
-									{/each}
-								</div>
-							{/if}
-						</section>
-
-						<section class="panel">
-							<h2>Pipeline</h2>
-							<code>
-								uv run inference full --input data/raw/clip.mp4 --output {selectedRun?.video ?? 'data/outputs/overlay.mp4'}
-							</code>
-							{#if selectedRun?.csv}
-								<a href={selectedRun.csv}>Download CSV</a>
-							{/if}
-						</section>
-					</div>
-				</section>
-			</section>
-		{/if}
-	{:else}
 		<section class="panel live-form">
 			<p class="eyebrow">Live Stream</p>
 			<h2>Send a source to the backend and get an annotated stream back</h2>
 			<p class="muted">
-				The backend owns decoding. Paste a local file path, a browser-playable URL, a webcam index, or an OBS
-				output. Annotated frames are pushed back over the WebSocket.
+				The backend owns decoding. Paste a local file path, a YouTube link, or an OBS device path.
+				Annotated frames are pushed back over the WebSocket.
 			</p>
 			<div class="form-grid">
 				<label class="field">
 					<span>Source type</span>
 					<select bind:value={liveSourceType}>
 						<option value="file">Local MP4 file</option>
-						<option value="url">URL (browser-captured)</option>
-						<option value="webcam">Webcam</option>
+						<option value="youtube">YouTube URL</option>
 						<option value="obs">OBS</option>
 					</select>
 				</label>
@@ -494,13 +221,24 @@
 					<span>Source</span>
 					<input type="text" bind:value={liveSourceValue} placeholder={sourcePlaceholder()} />
 				</label>
-				{#if liveSourceType === 'obs'}
+				{#if liveSourceType === 'file'}
 					<label class="field">
-						<span>OBS mode</span>
-						<select bind:value={liveObsMode}>
-							<option value="url">Stream URL</option>
-							<option value="device">Virtual camera device</option>
-						</select>
+						<span>Start</span>
+						<input type="text" bind:value={liveFileStart} placeholder="00:00:00" />
+					</label>
+					<label class="field">
+						<span>End</span>
+						<input type="text" bind:value={liveFileEnd} placeholder="00:02:00" />
+					</label>
+				{/if}
+				{#if liveSourceType === 'youtube'}
+					<label class="field">
+						<span>Start</span>
+						<input type="text" bind:value={liveYoutubeStart} placeholder="00:00:00" />
+					</label>
+					<label class="field">
+						<span>End</span>
+						<input type="text" bind:value={liveYoutubeEnd} placeholder="00:02:00" />
 					</label>
 				{/if}
 				<label class="field">
@@ -515,10 +253,6 @@
 						<option value="mps">mps</option>
 					</select>
 				</label>
-				<label class="field checkbox">
-					<input type="checkbox" bind:checked={skipTeamFit} />
-					<span>Skip team fit (faster)</span>
-				</label>
 			</div>
 			<div class="actions">
 				{#if liveRunning}
@@ -531,6 +265,31 @@
 				<p class="error">{liveError}</p>
 			{/if}
 		</section>
+	</aside>
+
+	<section class="right-pane">
+		<section class="live-metrics">
+			<div>
+				<span class="metric-value">{liveMeta?.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '-'}</span>
+				<span class="metric-label">model latency</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta?.detections ?? '-'}</span>
+				<span class="metric-label">detections</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta?.pressure?.pressure_side ?? '-'}</span>
+				<span class="metric-label">pressure side</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta?.pressure?.pressure_score ?? '-'}</span>
+				<span class="metric-label">pressure score</span>
+			</div>
+			<div>
+				<span class="metric-value">{liveMeta ? (liveMeta.team_ready ? 'ready' : 'warmup') : '-'}</span>
+				<span class="metric-label">teams</span>
+			</div>
+		</section>
 
 		<section class="live-stage">
 			<div class="video-frame output-frame">
@@ -539,33 +298,8 @@
 					<div class="placeholder">Annotated stream will appear here</div>
 				{/if}
 			</div>
-
-			{#if liveMeta}
-				<section class="live-metrics">
-					<div>
-						<span class="metric-value">{liveMeta.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '-'}</span>
-						<span class="metric-label">model latency</span>
-					</div>
-					<div>
-						<span class="metric-value">{liveMeta.detections}</span>
-						<span class="metric-label">detections</span>
-					</div>
-					<div>
-						<span class="metric-value">{liveMeta.pressure?.pressure_side ?? '-'}</span>
-						<span class="metric-label">pressure side</span>
-					</div>
-					<div>
-						<span class="metric-value">{liveMeta.pressure?.pressure_score ?? 0}</span>
-						<span class="metric-label">pressure score</span>
-					</div>
-					<div>
-						<span class="metric-value">{liveMeta.team_ready ? 'ready' : 'warmup'}</span>
-						<span class="metric-label">teams</span>
-					</div>
-				</section>
-			{/if}
 		</section>
-	{/if}
+	</section>
 </main>
 
 <style>
@@ -578,9 +312,29 @@
 	}
 
 	.shell {
-		min-height: 100vh;
+		display: grid;
+		grid-template-columns: 320px minmax(0, 1fr);
+		gap: 24px;
+		height: 100vh;
+		overflow: hidden;
 		padding: 24px;
 		box-sizing: border-box;
+	}
+
+	.left-pane {
+		display: flex;
+		flex-direction: column;
+		gap: 18px;
+		overflow-y: auto;
+		min-width: 0;
+	}
+
+	.right-pane {
+		display: flex;
+		flex-direction: column;
+		gap: 18px;
+		min-width: 0;
+		overflow: hidden;
 	}
 
 	.topbar {
@@ -588,7 +342,6 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 20px;
-		margin-bottom: 20px;
 	}
 
 	.eyebrow {
@@ -613,30 +366,6 @@
 	h2 {
 		margin-bottom: 14px;
 		font-size: 16px;
-	}
-
-	h3 {
-		margin: 0 0 12px;
-	}
-
-	.tabs {
-		display: flex;
-		gap: 8px;
-	}
-
-	.tabs button {
-		border: 1px solid #3b4541;
-		background: #1c2421;
-		color: #f3f5f4;
-		border-radius: 6px;
-		padding: 10px 16px;
-		font: inherit;
-		cursor: pointer;
-	}
-
-	.tabs button.active {
-		border-color: #77c996;
-		background: #213029;
 	}
 
 	button,
@@ -672,13 +401,11 @@
 		background: #161b1a;
 		border-radius: 8px;
 		padding: 16px;
-		margin-bottom: 18px;
 	}
 
-	.full-form .form-grid,
 	.live-form .form-grid {
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
+		grid-template-columns: 1fr;
 		gap: 12px;
 		margin: 14px 0;
 	}
@@ -704,8 +431,16 @@
 		font: inherit;
 	}
 
+	.field select {
+		padding: 8px 28px 8px 10px;
+		appearance: none;
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aab4af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 10px center;
+	}
+
 	.field.span-2 {
-		grid-column: span 2;
+		grid-column: auto;
 	}
 
 	.field.checkbox {
@@ -726,37 +461,13 @@
 		margin-top: 12px;
 	}
 
-	.workspace {
-		display: grid;
-		grid-template-columns: 280px minmax(0, 1fr);
-		gap: 18px;
-	}
-
-	.runlist {
+	.live-stage {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-	}
-
-	.runlist button {
-		display: grid;
-		gap: 6px;
-		text-align: left;
-		background: #161b1a;
-	}
-
-	.runlist button.active {
-		border-color: #77c996;
-		background: #213029;
-	}
-
-	.runlist small {
-		color: #aab4af;
-		font-size: 12px;
-	}
-
-	.review {
+		gap: 14px;
 		min-width: 0;
+		flex: 1 1 auto;
+		min-height: 0;
 	}
 
 	.video-frame {
@@ -764,19 +475,13 @@
 		border: 1px solid #26302c;
 		border-radius: 8px;
 		overflow: hidden;
-		aspect-ratio: 16 / 9;
+		flex: 1 1 auto;
 		position: relative;
+		min-height: 0;
 	}
 
 	.output-frame {
-		min-height: 360px;
-	}
-
-	video {
-		width: 100%;
-		height: 100%;
-		display: block;
-		object-fit: contain;
+		min-height: 0;
 	}
 
 	.output-canvas {
@@ -794,14 +499,6 @@
 		color: #aab4af;
 	}
 
-	.metrics {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 10px;
-		margin: 14px 0;
-	}
-
-	.metrics > div,
 	.live-metrics > div,
 	.empty {
 		border: 1px solid #26302c;
@@ -809,7 +506,6 @@
 		border-radius: 8px;
 	}
 
-	.metrics > div,
 	.live-metrics > div {
 		display: grid;
 		gap: 4px;
@@ -830,51 +526,6 @@
 		display: grid;
 		grid-template-columns: repeat(5, minmax(0, 1fr));
 		gap: 10px;
-		margin-top: 14px;
-	}
-
-	.detail-grid {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 14px;
-	}
-
-	.bars {
-		display: grid;
-		gap: 12px;
-	}
-
-	.bar-label {
-		display: flex;
-		justify-content: space-between;
-		gap: 12px;
-		margin-bottom: 6px;
-		font-size: 14px;
-	}
-
-	.bar-track {
-		height: 8px;
-		background: #27312d;
-		border-radius: 999px;
-		overflow: hidden;
-	}
-
-	.bar-track div {
-		height: 100%;
-		background: #77c996;
-	}
-
-	code {
-		display: block;
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-		padding: 12px;
-		margin-bottom: 14px;
-		background: #0d1110;
-		border: 1px solid #26302c;
-		border-radius: 6px;
-		color: #d8e4dd;
-		font-size: 13px;
 	}
 
 	.empty {
@@ -886,76 +537,20 @@
 		color: #ffc2b8;
 	}
 
-	.modal-backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.75);
-		display: grid;
-		place-items: center;
-		z-index: 100;
-	}
-
-	.modal {
-		background: #161b1a;
-		border: 1px solid #26302c;
-		border-radius: 10px;
-		padding: 24px;
-		width: min(520px, 90vw);
-		max-height: 90vh;
-		overflow: auto;
-	}
-
-	.modal .status {
-		color: #c4ccc8;
-		margin: 8px 0 16px;
-	}
-
-	.progress-track {
-		height: 10px;
-		background: #27312d;
-		border-radius: 999px;
-		overflow: hidden;
-		margin-bottom: 10px;
-	}
-
-	.progress-fill {
-		height: 100%;
-		background: #77c996;
-		transition: width 0.2s ease;
-	}
-
-	.preview-frame {
-		margin: 14px 0;
-		border: 1px solid #26302c;
-		border-radius: 8px;
-		overflow: hidden;
-		background: #050706;
-	}
-
-	.preview-frame img {
-		width: 100%;
-		height: auto;
-		display: block;
-	}
-
 	@media (max-width: 900px) {
 		.shell {
+			grid-template-columns: 1fr;
+			height: auto;
+			overflow: visible;
 			padding: 16px;
 		}
 
-		.workspace,
-		.detail-grid,
-		.full-form .form-grid,
-		.live-form .form-grid,
+		.left-pane,
+		.right-pane {
+			overflow: visible;
+		}
+
 		.live-metrics {
-			grid-template-columns: 1fr;
-		}
-
-		.field.span-2 {
-			grid-column: auto;
-		}
-
-		.metrics {
 			grid-template-columns: 1fr;
 		}
 	}

@@ -396,7 +396,6 @@ class SportsProcessor:
         device: str = "cuda",
         conf: float = 0.25,
         img_size: int = 1280,
-        skip_team_fit: bool = False,
         team_sample_stride: int = STRIDE,
         siglip_batch_size: int = 64,
     ):
@@ -404,7 +403,6 @@ class SportsProcessor:
         self.device = device
         self.conf = conf
         self.img_size = img_size
-        self.skip_team_fit = skip_team_fit
         self.team_sample_stride = team_sample_stride
         self.siglip_batch_size = siglip_batch_size
 
@@ -443,7 +441,7 @@ class SportsProcessor:
         )
 
     def fit_team_classifier_from_video(self, video_path: str, max_frames: int = 0) -> None:
-        if self.skip_team_fit or self._team_fit_done or self.player_model is None:
+        if self._team_fit_done or self.player_model is None:
             return
         try:
             self._team_classifier_state = _build_team_classifier(
@@ -461,7 +459,7 @@ class SportsProcessor:
 
     def fit_team_classifier_from_crops(self, crops: list[np.ndarray]) -> None:
         """Fit the classifier lazily from a batch of player crops."""
-        if self.skip_team_fit or self._team_fit_done or len(crops) < 4:
+        if self._team_fit_done or len(crops) < 4:
             return
         try:
             self.team_classifier = TeamClassifier(device=self.device)
@@ -826,7 +824,6 @@ def run_full(
     max_frames: int = 0,
     stride: int = 1,
     batch_size: int = 4,
-    skip_team_fit: bool = False,
     team_sample_stride: int = STRIDE,
     siglip_batch_size: int = 64,
     team_cache: bool = True,
@@ -853,27 +850,25 @@ def run_full(
         device=device,
         conf=conf,
         img_size=img_size,
-        skip_team_fit=skip_team_fit,
         team_sample_stride=team_sample_stride,
         siglip_batch_size=siglip_batch_size,
     )
     processor.load_models()
 
-    # Team classifier with disk cache
-    if not skip_team_fit:
-        cache_path = _team_cache_path(input_path, team_cache_dir, img_size, conf, team_sample_stride)
-        if team_cache and cache_path.exists():
-            print(f"Loading cached team classifier from {cache_path}")
-            try:
-                processor._team_classifier_state = TeamClassifierState.load(cache_path)
-                processor._team_fit_done = True
-            except Exception as exc:
-                print(f"Failed to load team classifier cache: {exc}; refitting...")
-                processor._team_fit_done = False
-        if not processor._team_fit_done:
-            processor.fit_team_classifier_from_video(str(input_path), max_frames=300)
-            if team_cache and processor._team_classifier_state is not None:
-                processor._team_classifier_state.save(cache_path)
+    # Team classifier with disk cache.
+    cache_path = _team_cache_path(input_path, team_cache_dir, img_size, conf, team_sample_stride)
+    if team_cache and cache_path.exists():
+        print(f"Loading cached team classifier from {cache_path}")
+        try:
+            processor._team_classifier_state = TeamClassifierState.load(cache_path)
+            processor._team_fit_done = True
+        except Exception as exc:
+            print(f"Failed to load team classifier cache: {exc}; refitting...")
+            processor._team_fit_done = False
+    if not processor._team_fit_done:
+        processor.fit_team_classifier_from_video(str(input_path), max_frames=300)
+        if team_cache and processor._team_classifier_state is not None:
+            processor._team_classifier_state.save(cache_path)
 
     # Start async frame decoder
     reader = _FrameReader(input_path, stride, max_frames, decoder_queue_size)

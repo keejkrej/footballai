@@ -23,10 +23,9 @@ proxy WebSocket connections to this server. Example Nginx snippet:
 
 WebSocket protocol:
 - Text messages are JSON commands:
-  { "action": "full", "youtubeUrl": "...", "start": "...", "end": "..." }
-  { "action": "live_start", "source": { "type": "file", "path": "..." } }
-  { "action": "live_start", "source": { "type": "url", "url": "..." } }
-  { "action": "live_start", "source": { "type": "webcam", "device": 0 } }
+  { "action": "live_start", "source": { "type": "file", "path": "...", "start": "00:00:00", "end": "00:02:00" } }
+  { "action": "live_start", "source": { "type": "youtube", "url": "...", "start": "00:00:00", "end": "00:02:00" } }
+  { "action": "live_start", "source": { "type": "obs", "device": "/dev/video2" } }
   { "action": "live_stop" }
   { "action": "configure", "options": { "device": "cuda" } }
   { "action": "runs" }
@@ -274,7 +273,6 @@ def _run_full_job(
             max_frames=options.get("max_frames", 0),
             stride=options.get("stride", 1),
             batch_size=options.get("batch_size", 4),
-            skip_team_fit=options.get("skip_team_fit", False),
             team_sample_stride=options.get("team_sample_stride", 60),
             siglip_batch_size=options.get("siglip_batch_size", 64),
             team_cache=options.get("team_cache", True),
@@ -332,7 +330,6 @@ async def _run_live_loop(
     device: str,
     conf: float,
     img_size: int,
-    skip_team_fit: bool,
     team_sample_stride: int,
 ) -> None:
     processor = SportsProcessor(
@@ -340,7 +337,6 @@ async def _run_live_loop(
         device=device,
         conf=conf,
         img_size=img_size,
-        skip_team_fit=skip_team_fit,
         team_sample_stride=team_sample_stride,
     )
     processor.load_models()
@@ -376,7 +372,7 @@ async def _run_live_loop(
                 continue
 
             # Lazy team fitting from live crops
-            if not skip_team_fit and not processor._team_fit_done:
+            if not processor._team_fit_done:
                 if frame_idx % team_sample_stride == 0:
                     result = processor.player_model(
                         frame, imgsz=img_size, verbose=False, device=device
@@ -418,7 +414,7 @@ async def _run_live_loop(
                     "detections": len(records),
                     "possession": possession,
                     "pressure": pressure,
-                    "team_ready": processor._team_fit_done or skip_team_fit,
+                    "team_ready": processor._team_fit_done,
                 }
             )
             frame_idx += 1
@@ -457,7 +453,6 @@ async def _handle_connection(
     # Defaults configurable via "configure"
     current_device = device
     team_sample_stride = 60
-    skip_team_fit = False
 
     live_task: asyncio.Task | None = None
     live_source: VideoSource | None = None
@@ -518,7 +513,6 @@ async def _handle_connection(
                     team_sample_stride = opts.get(
                         "team_sample_stride", team_sample_stride
                     )
-                    skip_team_fit = opts.get("skip_team_fit", skip_team_fit)
                     await send_json(
                         {"type": "status", "status": "configured", "options": opts}
                     )
@@ -552,9 +546,6 @@ async def _handle_connection(
                             device=live_options.get("device", current_device),
                             conf=live_options.get("conf", conf),
                             img_size=live_options.get("img_size", img_size),
-                            skip_team_fit=live_options.get(
-                                "skip_team_fit", skip_team_fit
-                            ),
                             team_sample_stride=live_options.get(
                                 "team_sample_stride", team_sample_stride
                             ),
@@ -572,7 +563,6 @@ async def _handle_connection(
                         "max_frames": payload.get("max_frames", 0),
                         "stride": payload.get("stride", 1),
                         "batch_size": payload.get("batch_size", 4),
-                        "skip_team_fit": payload.get("skip_team_fit", skip_team_fit),
                         "team_sample_stride": payload.get(
                             "team_sample_stride", team_sample_stride
                         ),

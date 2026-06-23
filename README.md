@@ -6,7 +6,7 @@ video analysis. The Python layer uses the **Roboflow sports** YOLOv8 soccer stac
 
 - **Full**: paste a YouTube link, the Python WebSocket server downloads the clip
   and runs the full inference pipeline, then the SPA plays the annotated MP4.
-- **Live**: describe a video source (local MP4, browser URL, webcam, or OBS
+- **Live**: describe a video source (local MP4, YouTube URL, or OBS device
   output) and send it to the Python WebSocket server. The backend decodes the
   source, runs inference, and pushes annotated JPEG frames + live metrics back
   to the SPA.
@@ -69,13 +69,12 @@ uv run web --port 8000
 
 ### Common options
 
-| Option            | Description                                                          |
-| ----------------- | -------------------------------------------------------------------- |
-| `--models-dir`    | Directory containing the Roboflow `.pt` weights (default: `models/`) |
-| `--device`        | Torch device: `cuda`, `cpu`, `mps`                                   |
-| `--conf`          | Detection confidence threshold (default: 0.25)                       |
-| `--img-size`      | Player/pitch inference size (default: 1280)                          |
-| `--skip-team-fit` | Skip SigLIP/UMAP/KMeans team clustering (faster)                     |
+| Option         | Description                                                          |
+| -------------- | -------------------------------------------------------------------- |
+| `--models-dir` | Directory containing the Roboflow `.pt` weights (default: `models/`) |
+| `--device`     | Torch device: `cuda`, `cpu`, `mps`                                   |
+| `--conf`       | Detection confidence threshold (default: 0.25)                       |
+| `--img-size`   | Player/pitch inference size (default: 1280)                          |
 
 ### `inference full` options
 
@@ -103,10 +102,9 @@ JSON metadata back to the client for live jobs:
 ```json
 {"action": "configure", "options": {"device": "cuda"}}
 {"action": "full", "youtubeUrl": "...", "start": "00:00:00", "end": "00:02:00"}
-{"action": "live_start", "source": {"type": "file", "path": "data/raw/clip.mp4"}, "options": {"device": "cuda"}}
-{"action": "live_start", "source": {"type": "url", "url": "https://example.com/stream.m3u8"}}
-{"action": "live_start", "source": {"type": "webcam", "device": 0}}
-{"action": "live_start", "source": {"type": "obs", "mode": "url", "url": "rtmp://..."}}
+{"action": "live_start", "source": {"type": "file", "path": "data/raw/clip.mp4", "start": "00:00:00", "end": "00:02:00"}, "options": {"device": "cuda"}}
+{"action": "live_start", "source": {"type": "youtube", "url": "...", "start": "00:00:00", "end": "00:02:00"}}
+{"action": "live_start", "source": {"type": "obs", "device": "/dev/video2"}}
 {"action": "live_stop"}
 {"action": "runs"}
 {"action": "job", "id": "..."}
@@ -189,28 +187,25 @@ in `index.html` or in your Vite proxy config.
 1. Make sure the Python WebSocket server is running.
 2. Pick a source type and enter the source value:
    - **Local MP4 file**: an absolute or repo-relative path such as `data/raw/clip.mp4`.
-   - **URL**: any browser-playable stream page or direct media URL. The backend
-     launches a headless Chromium instance and captures the `<video>` frames.
-   - **Webcam**: a device index such as `0` (defaults to `0` if left empty).
-   - **OBS**: either an RTMP/RTSP/SRT/HTTP URL that OBS is streaming to, or a
-     virtual-camera device path such as `/dev/video2`.
+     Optional `start` and `end` timestamps (`HH:MM:SS`) limit inference to a
+     segment; otherwise the whole file is decoded.
+   - **YouTube URL**: a YouTube video URL. The backend uses yt-dlp to resolve the
+     stream and ffmpeg to decode it frame-by-frame while inference runs.
+   - **OBS device**: a virtual-camera device path such as `/dev/video2`.
 3. Set the max inference FPS and device options.
 4. Click **Start live**. The backend decodes the source, runs inference, and
    streams annotated JPEG frames back to the browser.
 
 ### Stream compatibility note
 
-URL sources are captured through a headless Chromium instance, so they work for
-any page the browser can render and play unencrypted. Geo-restricted or
-DRM-encrypted broadcaster streams (e.g. ZDF World Cup streams) usually cannot be
-surfaced by the browser and capturing them would likely violate the
-broadcaster's terms of service and applicable copyright law. This app is
-intended for:
+Only sources that can be decoded directly by ffmpeg or OpenCV are supported.
+YouTube URLs are resolved by yt-dlp and passed to ffmpeg. Geo-restricted or
+DRM-encrypted broadcaster streams cannot be processed. This app is intended for:
 
 - Public-domain or Creative Commons footage
 - Streams you own or have explicit rights to process
-- Unencrypted practice/test HLS streams
-- Your own webcam or local video files
+- Local video files you own or have rights to process
+- OBS-captured sources you control
 
 ## Data layout
 
