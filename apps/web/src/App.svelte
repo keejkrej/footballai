@@ -282,7 +282,7 @@
 		<section class="live-metrics">
 			<div>
 				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.shot_prob * 100)}%` : '-'}</span>
-				<span class="metric-label">shot prob</span>
+				<span class="metric-label">shot chance</span>
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.state ? liveMeta.state.xg.toFixed(2) : '-'}</span>
@@ -290,11 +290,11 @@
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.state ? `${Math.round(liveMeta.state.turnover_prob * 100)}%` : '-'}</span>
-				<span class="metric-label">turnover prob</span>
+				<span class="metric-label">turnover risk</span>
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.state ? `${liveMeta.state.top_receiver_slot} (${Math.round(liveMeta.state.top_receiver_prob * 100)}%)` : '-'}</span>
-				<span class="metric-label">pass receiver</span>
+				<span class="metric-label">likely receiver</span>
 			</div>
 			<div>
 				<span class="metric-value">{liveMeta?.latency_ms ? `${Math.round(liveMeta.latency_ms)}ms` : '-'}</span>
