@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Topbar, LiveForm, LiveMetrics, LiveStage } from './lib/components';
-	import { useLiveStream } from './lib/live/stream';
+	import { useLiveStream } from './lib/live/stream.svelte';
 
 	const stream = useLiveStream();
 	let canvas = $state<HTMLCanvasElement | null>(null);
