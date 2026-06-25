@@ -116,6 +116,8 @@ def _render_radar(
     color_lookup: np.ndarray,
     ball_xy: np.ndarray | None = None,
 ) -> np.ndarray:
+    if len(keypoints.xy) == 0:
+        raise ValueError("No pitch keypoints detected")
     mask = (keypoints.xy[0][:, 0] > 1) & (keypoints.xy[0][:, 1] > 1)
     if mask.sum() < 4:
         raise ValueError("Not enough valid pitch keypoints to compute homography")
@@ -315,11 +317,12 @@ def _detections_to_records(
     """Convert frame detections to CSV rows."""
     records: list[dict] = []
 
-    mask = (keypoints.xy[0][:, 0] > 1) & (keypoints.xy[0][:, 1] > 1)
+    kp = keypoints.xy[0] if len(keypoints.xy) else np.empty((0, 2), dtype=np.float32)
+    mask = (kp[:, 0] > 1) & (kp[:, 1] > 1)
     transformer = None
     if mask.sum() >= 4:
         transformer = ViewTransformer(
-            source=keypoints.xy[0][mask].astype(np.float32),
+            source=kp[mask].astype(np.float32),
             target=np.array(CONFIG.vertices)[mask].astype(np.float32),
         )
 
