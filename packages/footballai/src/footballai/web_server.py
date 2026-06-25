@@ -368,8 +368,10 @@ async def _run_live_loop(
         async for _, frame, fps in source.frames():
             started = time.time()
             try:
-                records, annotated, meta = processor.process_frame(
-                    frame, frame_idx, fps
+                # Run inference off the event loop so the loop stays free to
+                # drain the socket and the source can keep reading frames.
+                records, annotated, meta = await asyncio.to_thread(
+                    processor.process_frame, frame, frame_idx, fps
                 )
             except Exception as exc:
                 await send_json(
@@ -381,20 +383,26 @@ async def _run_live_loop(
             # Lazy team fitting from live crops
             if not processor._team_fit_done:
                 if frame_idx % team_sample_stride == 0:
-                    result = processor.player_model(
-                        frame, imgsz=img_size, verbose=False, device=device
-                    )[0]
-                    detections = sv.Detections.from_ultralytics(result)
-                    players_det = detections[detections.class_id == 2]
-                    team_crops += [
-                        sv.crop_image(frame, xyxy) for xyxy in players_det.xyxy
-                    ]
+
+                    def _sample_team_crops() -> list[np.ndarray]:
+                        result = processor.player_model(
+                            frame, imgsz=img_size, verbose=False, device=device
+                        )[0]
+                        detections = sv.Detections.from_ultralytics(result)
+                        players_det = detections[detections.class_id == 2]
+                        return [
+                            sv.crop_image(frame, xyxy) for xyxy in players_det.xyxy
+                        ]
+
+                    team_crops += await asyncio.to_thread(_sample_team_crops)
                     if len(team_crops) >= MIN_TEAM_CROPS:
-                        processor.fit_team_classifier_from_crops(team_crops)
+                        await asyncio.to_thread(
+                            processor.fit_team_classifier_from_crops, team_crops
+                        )
                         team_crops = []
 
             try:
-                jpeg = _encode_frame(annotated)
+                jpeg = await asyncio.to_thread(_encode_frame, annotated)
             except Exception as exc:
                 await send_json(
                     {

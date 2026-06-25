@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -347,12 +348,24 @@ class YoutubeVideoSource(VideoSource):
 
 
 class ObsVideoSource(VideoSource):
-    """Capture frames from an OBS virtual-camera device."""
+    """Capture frames from an OBS virtual-camera device.
+
+    A background thread drains the device continuously and keeps only the most
+    recent frame. The async ``frames()`` consumer then serves that latest frame
+    at the requested rate, dropping any intermediate frames. This prevents the
+    driver-side buffer from filling with stale frames while inference is busy,
+    which otherwise causes bursty playback followed by stalls.
+    """
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._cap: cv2.VideoCapture | None = None
         self._frame_idx = 0
+        self._reader: threading.Thread | None = None
+        self._reader_stop = threading.Event()
+        self._latest_lock = threading.Lock()
+        self._latest: tuple[int, np.ndarray] | None = None
+        self._latest_seq = 0
 
     async def open(self) -> None:
         device = self.config.get("device")
@@ -365,6 +378,9 @@ class ObsVideoSource(VideoSource):
             )
             if not cap.isOpened():
                 raise RuntimeError(f"Could not open OBS device: {device}")
+            # Keep only the freshest frame in the driver buffer so reads never
+            # serve a backlog of stale frames.
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             return cap
 
         self._cap = await asyncio.to_thread(_open)
@@ -373,8 +389,30 @@ class ObsVideoSource(VideoSource):
         self.height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
         self._frame_idx = 0
 
+        self._reader_stop.clear()
+        self._reader = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader.start()
+
+    def _reader_loop(self) -> None:
+        cap = self._cap
+        if cap is None:
+            return
+        while not self._reader_stop.is_set():
+            ok, frame = cap.read()
+            if not ok:
+                time.sleep(0.01)
+                continue
+            with self._latest_lock:
+                self._latest_seq += 1
+                self._latest = (self._latest_seq, frame)
+
     async def close(self) -> None:
         self._closed = True
+        self._reader_stop.set()
+        reader = self._reader
+        self._reader = None
+        if reader is not None:
+            await asyncio.to_thread(reader.join, 2.0)
         if self._cap is not None:
             cap = self._cap
             self._cap = None
@@ -385,22 +423,27 @@ class ObsVideoSource(VideoSource):
             raise RuntimeError("Source not opened")
 
         max_fps = self.config.get("max_fps")
-        interval = 1.0 / max_fps if max_fps and max_fps > 0 else None
-        last_emit = 0.0
+        interval = 1.0 / max_fps if max_fps and max_fps > 0 else 0.0
+        last_emit_seq = 0
+        next_emit = time.monotonic()
 
         while not self._closed:
-            ok, frame = await asyncio.to_thread(self._cap.read)
-            if not ok:
-                await asyncio.sleep(0.05)
+            now = time.monotonic()
+            if interval and now < next_emit:
+                await asyncio.sleep(min(next_emit - now, 0.01))
                 continue
 
-            if interval:
-                now = time.monotonic()
-                if now - last_emit < interval:
-                    continue
-                last_emit = now
+            with self._latest_lock:
+                latest = self._latest
 
-            yield self._frame_idx, frame, self.fps
+            if latest is None or latest[0] == last_emit_seq:
+                # No new frame since the last emit; wait briefly for one.
+                await asyncio.sleep(0.005)
+                continue
+
+            last_emit_seq = latest[0]
+            next_emit = now + interval
+            yield self._frame_idx, latest[1], self.fps
             self._frame_idx += 1
 
 
